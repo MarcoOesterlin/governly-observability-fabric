@@ -1,0 +1,8 @@
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Geist Variable','Geist',system-ui,-apple-system,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
+::selection{background:rgba(99,102,241,0.20);}
+@keyframes pulseDot{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.35;transform:scale(.78);}}
+::-webkit-scrollbar{width:11px;height:11px;}
+::-webkit-scrollbar-thumb{background:rgba(130,130,140,.32);border-radius:9px;border:3px solid transparent;background-clip:content-box;}
+::-webkit-scrollbar-thumb:hover{background:rgba(130,130,140,.5);background-clip:content-box;}
+i.ph{display:inline-flex;line-height:1;}
