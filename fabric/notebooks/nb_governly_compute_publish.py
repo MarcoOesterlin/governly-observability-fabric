@@ -131,15 +131,15 @@ def should_create_case(incident: dict, asset: dict | None = None) -> bool:
         if mtype in ("Quality", "Volume"):
             if asset is None:
                 return True
-            q_score = float(asset.get("quality_score") if asset.get("quality_score") is not None else 0.0)
+            q_score = float(asset.get("quality_score") if asset.get("quality_score") is not None else -1.0)
             q_pass = int(asset.get("quality_pass") or 0)
             q_total = int(asset.get("quality_total") or 0)
-            return q_score < 95.0 or q_pass < q_total
+            return (q_score >= 0.0 and q_score < 95.0) or q_pass < q_total
     if asset is not None:
         if asset.get("is_late"):
             return True
-        q_score = float(asset.get("quality_score") if asset.get("quality_score") is not None else 100.0)
-        if q_score < 95.0 or int(asset.get("quality_pass") or 0) < int(asset.get("quality_total") or 0):
+        q_score = float(asset.get("quality_score") if asset.get("quality_score") is not None else -1.0)
+        if (q_score >= 0.0 and q_score < 95.0) or int(asset.get("quality_pass") or 0) < int(asset.get("quality_total") or 0):
             return True
     return False
 
@@ -426,7 +426,7 @@ def build_incident_impacts(
     return impacts
 
 
-def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict]) -> int:
+def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict], commit: bool = True) -> int:
     """Replace all rows in `dbo.[<sql_table>]` over a Spark JVM JDBC connection inside a transaction."""
     sql_table = resolve_sql_table_name(table)
     stmt = jdbc_conn.createStatement()
@@ -436,7 +436,8 @@ def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict]) -> int
         stmt.close()
 
     if not rows:
-        jdbc_conn.commit()
+        if commit:
+            jdbc_conn.commit()
         return 0
 
     cols = list(rows[0].keys())
@@ -461,7 +462,8 @@ def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict]) -> int
         ps.executeBatch()
     finally:
         ps.close()
-    jdbc_conn.commit()
+    if commit:
+        jdbc_conn.commit()
     return len(rows)
 
 
@@ -1205,16 +1207,17 @@ def discover_and_profile_live_fabric(
                 quality.extend(asset_q)
                 q_total = len(asset_q)
                 q_pass = sum(1 for r in asset_q if r["passed"])
-                q_score = round(sum(float(r["pass_rate"]) for r in asset_q) / q_total, 1) if q_total else 100.0
+                q_score = round(sum(float(r["pass_rate"]) for r in asset_q) / q_total, 1) if q_total else -1.0
                 failed_q = [r for r in asset_q if not r["passed"] and r["rule_name"] != "Freshness SLA"]
 
-                if (is_late and failed_q) or q_score < 75.0:
+                if (is_late and failed_q) or (q_score >= 0.0 and q_score < 75.0):
                     status = "critical"
-                elif is_late or failed_q or q_score < 95.0:
+                elif is_late or failed_q or (q_score >= 0.0 and q_score < 95.0):
                     status = "warning"
                 else:
                     status = "healthy"
-                health_score = round(max(25.0, q_score - (15.0 if is_late else 0.0)), 1)
+                base_health = q_score if q_score >= 0.0 else 100.0
+                health_score = round(max(25.0, base_health - (15.0 if is_late else 0.0)), 1)
 
                 assets.append({
                     "workspace_id": wid,
@@ -1255,7 +1258,7 @@ def discover_and_profile_live_fabric(
                         "observed_label": format_lag_minutes(lag_min),
                         "domain_key": d_key,
                     })
-                if failed_q or q_score < 95.0:
+                if failed_q or (q_score >= 0.0 and q_score < 95.0):
                     first_fail = failed_q[0] if failed_q else {"rule_name": "Quality threshold", "observed_label": f"{q_score:.1f}%"}
                     inc_num = 1000 + (abs(hash(f"{wid}:{asset_key}:qual")) % 8999)
                     incidents.append({
@@ -1439,7 +1442,7 @@ def discover_and_profile_live_fabric(
                 "steward_name": ws_steward_name,
                 "status": sm_prof["status"],
                 "health_score": sm_prof["health_score"],
-                "quality_score": 100.0,
+                "quality_score": -1.0,
                 "freshness_label": sm_prof["freshness_label"],
                 "is_late": sm_prof["is_late"],
                 "last_refresh_at": sm_prof["last_refresh_at"],
@@ -1485,7 +1488,7 @@ def discover_and_profile_live_fabric(
                 "steward_name": ws_steward_name,
                 "status": pl_prof["status"],
                 "health_score": pl_prof["health_score"],
-                "quality_score": 100.0,
+                "quality_score": -1.0,
                 "freshness_label": pl_prof["freshness_label"],
                 "is_late": pl_prof["is_late"],
                 "last_refresh_at": pl_prof["last_refresh_at"],
@@ -1516,7 +1519,7 @@ def discover_and_profile_live_fabric(
                 "steward_name": ws_steward_name,
                 "status": nb_prof["status"],
                 "health_score": nb_prof["health_score"],
-                "quality_score": 100.0,
+                "quality_score": -1.0,
                 "freshness_label": nb_prof["freshness_label"],
                 "is_late": nb_prof["is_late"],
                 "last_refresh_at": nb_prof["last_refresh_at"],
@@ -1543,7 +1546,7 @@ def discover_and_profile_live_fabric(
                 "steward_name": ws_steward_name,
                 "status": "healthy",
                 "health_score": 99.0,
-                "quality_score": 100.0,
+                "quality_score": -1.0,
                 "freshness_label": "Active",
                 "is_late": False,
                 "last_refresh_at": now_iso,
@@ -1741,14 +1744,14 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
             "owner_name": a["steward_name"],
             "status": a["status"],
             "health_score": float(a.get("health_score") or 95.0),
-            "quality_score": float(a.get("quality_score") if a.get("quality_score") is not None else 100.0),
+            "quality_score": float(a.get("quality_score") if a.get("quality_score") is not None else -1.0),
             "freshness_label": a.get("freshness_label") or "Active",
             "is_late": bool(a.get("is_late", False)),
             "last_refresh_at": a.get("last_refresh_at") or started_at,
             "sla_minutes": int(a.get("freshness_sla_minutes") or 60),
             "row_count_label": a.get("row_count_label") or format_row_count(a.get("row_count")),
-            "quality_pass": int(a.get("quality_pass") or 1),
-            "quality_total": int(a.get("quality_total") or 1),
+            "quality_pass": int(a.get("quality_pass") or 0),
+            "quality_total": int(a.get("quality_total") or 0),
             "fabric_item_url": a.get("fabric_item_url"),
             "published_at": started_at,
         }
@@ -1976,12 +1979,12 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
             ("PubIncidentImpact", pub_impacts),
         ]
         for logical_name, rows in payloads:
-            counts_by_table[logical_name] = replace_table_rows_jdbc(jdbc_conn, logical_name, rows)
+            counts_by_table[logical_name] = replace_table_rows_jdbc(jdbc_conn, logical_name, rows, commit=False)
 
         # ReplaceCaseIncidentLinks before StewardCases due to FK constraint
-        counts_by_table["CaseIncidentLink"] = replace_table_rows_jdbc(jdbc_conn, "CaseIncidentLink", [])
-        counts_by_table["StewardCase"] = replace_table_rows_jdbc(jdbc_conn, "StewardCase", steward_cases)
-        counts_by_table["CaseIncidentLink"] = replace_table_rows_jdbc(jdbc_conn, "CaseIncidentLink", case_links)
+        counts_by_table["CaseIncidentLink"] = replace_table_rows_jdbc(jdbc_conn, "CaseIncidentLink", [], commit=False)
+        counts_by_table["StewardCase"] = replace_table_rows_jdbc(jdbc_conn, "StewardCase", steward_cases, commit=False)
+        counts_by_table["CaseIncidentLink"] = replace_table_rows_jdbc(jdbc_conn, "CaseIncidentLink", case_links, commit=False)
 
         ended_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         counts_by_table["PubPublishRun"] = replace_table_rows_jdbc(
@@ -1996,6 +1999,7 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
                 "status": "Succeeded",
                 "error": None,
             }],
+            commit=True,
         )
     finally:
         jdbc_conn.close()

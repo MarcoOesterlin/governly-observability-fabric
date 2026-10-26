@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ALL_WORKSPACES_ID, useWorkspace } from '../app/WorkspaceProvider';
 import { client } from './client';
+import { useCachedQuery } from './queryCache';
 import { useCurrentSteward } from './useCurrentSteward';
 
 const SLA_STORAGE_KEY = 'governly.freshnessSlas';
@@ -117,41 +118,37 @@ export function useFreshnessSlas() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const baseQuery = client.data.QualityRule.select([
-          'id',
-          'asset_key',
-          'rule_type',
-          'threshold_pct',
-          'is_active',
-        ]);
-        const rows =
-          workspaceId === ALL_WORKSPACES_ID
-            ? await baseQuery.where({ rule_type: { eq: 'freshness_sla' } }).execute()
-            : await baseQuery
-                .where({ workspace_id: { eq: workspaceId }, rule_type: { eq: 'freshness_sla' } })
-                .execute();
-        if (cancelled || !Array.isArray(rows)) return;
-        const next: SlaMap = { ...loadLocalSlas() };
-        for (const r of rows) {
-          if (r.is_active && Number(r.threshold_pct) > 0) {
-            next[r.asset_key] = Number(r.threshold_pct);
-          }
+  const remoteSlas = useCachedQuery<SlaMap>(
+    workspaceId ? `freshness-slas:${workspaceId}` : null,
+    async () => {
+      const baseQuery = client.data.QualityRule.select([
+        'id',
+        'asset_key',
+        'rule_type',
+        'threshold_pct',
+        'is_active',
+      ]);
+      const rows =
+        workspaceId === ALL_WORKSPACES_ID
+          ? await baseQuery.where({ rule_type: { eq: 'freshness_sla' } }).execute()
+          : await baseQuery
+              .where({ workspace_id: { eq: workspaceId! }, rule_type: { eq: 'freshness_sla' } })
+              .execute();
+      if (!Array.isArray(rows)) return {};
+      const next: SlaMap = { ...loadLocalSlas() };
+      for (const r of rows) {
+        if (r.is_active && Number(r.threshold_pct) > 0) {
+          next[r.asset_key] = Number(r.threshold_pct);
         }
-        setSlaMap(next);
-        saveLocalSlas(next);
-      } catch {
-        // ignore offline/test errors
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, refreshTick]);
+      saveLocalSlas(next);
+      return next;
+    },
+    slaMap,
+    refreshTick,
+  );
+
+  const effectiveSlaMap = Object.keys(remoteSlas).length > 0 ? { ...remoteSlas, ...slaMap } : slaMap;
 
   const setSlaTarget = useCallback(
     async (targetKey: string, minutes: number) => {
@@ -204,7 +201,7 @@ export function useFreshnessSlas() {
   );
 
   return {
-    slaMap,
+    slaMap: effectiveSlaMap,
     saving,
     setSlaTarget,
   };

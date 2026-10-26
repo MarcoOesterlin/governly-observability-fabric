@@ -8,7 +8,9 @@ import type {
   TimeRange,
 } from "../fixtures/types";
 import { client } from "./client";
-import { byKpiOrder, toKpiFixture } from "./mappers";
+import { useCachedQuery } from "./queryCache";
+import { useAssets } from "./useAssets";
+import { useCases, useIncidents } from "./useIncidents";
 
 export function overrideOpenCasesKpi(
   kpis: KpiFixture[],
@@ -29,165 +31,68 @@ export function overrideOpenCasesKpi(
   );
 }
 
-const LIVE_EMPTY_KPIS: KpiFixture[] = [
-  {
-    label: "Healthy assets",
-    value: "0%",
-    sub: "0 of 0 monitored",
-    trend: "0%",
-    icon: "ph-check-circle",
-    trendGood: true,
-    trendFlat: true,
-  },
-  {
-    label: "Active incidents",
-    value: "0",
-    sub: "0 critical · 0 high",
-    trend: "0",
-    icon: "ph-warning-octagon",
-    trendGood: true,
-    trendFlat: true,
-  },
-  {
-    label: "Freshness SLA",
-    value: "100%",
-    sub: "0 late refreshes",
-    trend: "0%",
-    icon: "ph-timer",
-    trendGood: true,
-    trendFlat: true,
-  },
-  {
-    label: "Open cases",
-    value: "0",
-    sub: "Created on drift, breach, or poor quality",
-    trend: "0",
-    icon: "ph-kanban",
-    trendGood: true,
-    trendFlat: true,
-  },
-];
+export function useOverviewKpis(_range: TimeRange = "24h"): KpiFixture[] {
+  const { allRows: assets } = useAssets();
+  const incidents = useIncidents();
+  const cases = useCases();
 
-export function useOverviewKpis(range: TimeRange = "24h"): KpiFixture[] {
-  const { workspaceId, refreshTick } = useWorkspace();
-  const [liveData, setLiveData] = useState<KpiFixture[]>(LIVE_EMPTY_KPIS);
+  const totalAssets = assets.length;
+  const healthyCount = assets.filter((a) => a.status === "healthy").length;
+  const lateCount = assets.filter((a) => Boolean(a.late)).length;
+  const healthyPct =
+    totalAssets > 0 ? Math.round((healthyCount / totalAssets) * 100) : 100;
+  const slaPct =
+    totalAssets > 0 ? Math.round(((totalAssets - lateCount) / totalAssets) * 100) : 100;
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const isAll = workspaceId === ALL_WORKSPACES_ID;
-        if (isAll) {
-          const [assets, incidents, cases] = await Promise.all([
-            client.data.PubAsset.select(["status", "is_late"]).first(500).execute(),
-            client.data.PubIncident.select(["severity", "auto_resolved_at"]).execute(),
-            client.data.StewardCase.select(["id", "status", "due_date"]).execute(),
-          ]);
-          if (cancelled) return;
-          const assetList = Array.isArray(assets) ? assets : [];
-          const totalAssets = assetList.length;
-          const healthyCount = assetList.filter((a) => a.status === "healthy").length;
-          const lateCount = assetList.filter((a) => Boolean(a.is_late)).length;
-          const healthyPct =
-            totalAssets > 0 ? Math.round((healthyCount / totalAssets) * 100) : 100;
-          const slaPct =
-            totalAssets > 0 ? Math.round(((totalAssets - lateCount) / totalAssets) * 100) : 100;
+  const openIncidents = incidents.filter((i) => i.status !== "Resolved");
+  const critCount = openIncidents.filter((i) => i.sev === "Critical").length;
+  const highCount = openIncidents.filter((i) => i.sev === "High").length;
 
-          const incList = (Array.isArray(incidents) ? incidents : []).filter(
-            (i) => !i.auto_resolved_at
-          );
-          const critCount = incList.filter((i) => i.severity === "Critical").length;
-          const highCount = incList.filter((i) => i.severity === "High").length;
+  const openCases = cases.filter((c) => c.status !== "Done");
+  const openCount = openCases.length;
+  const dueLabel =
+    openCount > 0
+      ? `${openCount} active remediation case${openCount === 1 ? "" : "s"}`
+      : "Created on drift, breach, or poor quality";
 
-          const openCases = Array.isArray(cases)
-            ? cases.filter((c) => c.status !== "Closed" && c.status !== "Done")
-            : [];
-          const openCount = openCases.length;
-          const dueLabel =
-            openCount > 0
-              ? `${openCount} active remediation case${openCount === 1 ? "" : "s"}`
-              : "No active cases";
-
-          setLiveData([
-            {
-              label: "Healthy assets",
-              value: `${healthyPct}%`,
-              sub: `${healthyCount} of ${totalAssets} monitored`,
-              trend: "0%",
-              icon: "ph-check-circle",
-              trendGood: true,
-              trendFlat: true,
-            },
-            {
-              label: "Active incidents",
-              value: String(incList.length),
-              sub: `${critCount} critical · ${highCount} high`,
-              trend: "0",
-              icon: "ph-warning-octagon",
-              trendGood: incList.length === 0,
-              trendFlat: true,
-            },
-            {
-              label: "Freshness SLA",
-              value: `${slaPct}%`,
-              sub: `${lateCount} late refresh${lateCount === 1 ? "" : "es"}`,
-              trend: "0%",
-              icon: "ph-timer",
-              trendGood: lateCount === 0,
-              trendFlat: true,
-            },
-            {
-              label: "Open cases",
-              value: String(openCount),
-              sub: dueLabel,
-              trend: "0",
-              icon: "ph-kanban",
-              trendGood: true,
-              trendFlat: true,
-            },
-          ]);
-          return;
-        }
-
-        const [rows, cases] = await Promise.all([
-          client.data.PubOverviewKpi.select([
-            "kpi_key",
-            "label",
-            "value_label",
-            "sub_label",
-            "trend_label",
-            "trend_direction",
-          ])
-            .where({ workspace_id: { eq: workspaceId }, range: { eq: range } })
-            .execute(),
-          client.data.StewardCase.select(["id", "status", "due_date"])
-            .where({ workspace_id: { eq: workspaceId } })
-            .execute(),
-        ]);
-        if (cancelled) return;
-        const openCases = Array.isArray(cases)
-          ? cases.filter((c) => c.status !== "Closed" && c.status !== "Done")
-          : [];
-        const openCount = openCases.length;
-        const dueLabel =
-          openCount > 0 ? `${openCount} active remediation case${openCount === 1 ? "" : "s"}` : "No active cases";
-        if (!Array.isArray(rows) || rows.length === 0) {
-          setLiveData(overrideOpenCasesKpi(LIVE_EMPTY_KPIS, openCount, dueLabel));
-          return;
-        }
-        const mapped = [...rows].sort(byKpiOrder).map(toKpiFixture);
-        setLiveData(overrideOpenCasesKpi(mapped, openCount, dueLabel));
-      } catch {
-        if (!cancelled) setLiveData(LIVE_EMPTY_KPIS);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, range, refreshTick]);
-
-  return liveData;
+  return [
+    {
+      label: "Healthy assets",
+      value: `${healthyPct}%`,
+      sub: `${healthyCount} of ${totalAssets} monitored`,
+      trend: "0%",
+      icon: "ph-check-circle",
+      trendGood: healthyPct >= 90,
+      trendFlat: true,
+    },
+    {
+      label: "Active incidents",
+      value: String(openIncidents.length),
+      sub: `${critCount} critical · ${highCount} high`,
+      trend: "0",
+      icon: "ph-warning-octagon",
+      trendGood: openIncidents.length === 0,
+      trendFlat: true,
+    },
+    {
+      label: "Freshness SLA",
+      value: `${slaPct}%`,
+      sub: `${lateCount} late refresh${lateCount === 1 ? "" : "es"}`,
+      trend: "0%",
+      icon: "ph-timer",
+      trendGood: lateCount === 0,
+      trendFlat: true,
+    },
+    {
+      label: "Open cases",
+      value: String(openCount),
+      sub: dueLabel,
+      trend: "0",
+      icon: "ph-kanban",
+      trendGood: openCount === 0,
+      trendFlat: true,
+    },
+  ];
 }
 
 const LIVE_EMPTY_DISTRIBUTION: HealthDistributionFixture = {
@@ -285,6 +190,19 @@ export function useSignalThresholds(): [
   return [thresholds, update];
 }
 
+const EMPTY_STRIP_BUCKETS: { heights: number[]; axisLabels?: string[] } = {
+  heights: [],
+  axisLabels: undefined,
+};
+
+const EMPTY_SCHEMA_CHANGES: SchemaChangeFixture[] = [];
+
+const DEFAULT_PUBLISH_RUN_INFO = {
+  label: "recently",
+  shortLabel: "Live telemetry",
+  status: "Succeeded",
+};
+
 export function useHealthStrip(range: TimeRange = "24h"): {
   heights: number[];
   bars: HealthBarFixture[];
@@ -294,146 +212,106 @@ export function useHealthStrip(range: TimeRange = "24h"): {
 } {
   const { workspaceId, refreshTick } = useWorkspace();
   const [thresholds] = useSignalThresholds();
-  const [liveHeights, setLiveHeights] = useState<number[]>([]);
-  const [liveAxisLabels, setLiveAxisLabels] = useState<string[] | undefined>(undefined);
-  const [liveDistribution, setLiveDistribution] = useState<HealthDistributionFixture>(
-    LIVE_EMPTY_DISTRIBUTION
-  );
+  const { allRows: assets } = useAssets();
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const isAll = workspaceId === ALL_WORKSPACES_ID;
-        const [rows, distRows] = await Promise.all([
-          isAll
-            ? client.data.PubHealthBucket.select([
-                "bucket_index",
-                "bucket_start",
-                "height_pct",
-                "status",
-              ])
-                .where({ range: { eq: range } })
-                .first(1000)
-                .execute()
-            : client.data.PubHealthBucket.select([
-                "bucket_index",
-                "bucket_start",
-                "height_pct",
-                "status",
-              ])
-                .where({ workspace_id: { eq: workspaceId }, range: { eq: range } })
-                .execute(),
-          isAll
-            ? client.data.PubHealthDistribution.select([
-                "healthy",
-                "warning",
-                "critical",
-                "total",
-              ]).execute()
-            : client.data.PubHealthDistribution.select([
-                "healthy",
-                "warning",
-                "critical",
-                "total",
-              ])
-                .where({ workspace_id: { eq: workspaceId } })
-                .execute(),
-        ]);
-        if (cancelled) return;
-        if (Array.isArray(rows) && rows.length > 0) {
-          let sorted: Array<{ bucket_index: number; bucket_start: unknown; height_pct: number }>;
-          if (isAll) {
-            const byIdx = new Map<
-              number,
-              { bucket_index: number; bucket_start: unknown; sumHeight: number; count: number }
-            >();
-            for (const r of rows) {
-              const idx = Number(r.bucket_index);
-              const h = Number(r.height_pct);
-              const prev = byIdx.get(idx);
-              if (!prev) {
-                byIdx.set(idx, {
-                  bucket_index: idx,
-                  bucket_start: r.bucket_start,
-                  sumHeight: h,
-                  count: 1,
-                });
-              } else {
-                prev.sumHeight += h;
-                prev.count += 1;
-              }
-            }
-            sorted = [...byIdx.values()]
-              .sort((a, b) => a.bucket_index - b.bucket_index)
-              .slice(-40)
-              .map((b) => ({
-                bucket_index: b.bucket_index,
-                bucket_start: b.bucket_start,
-                height_pct: Number((b.sumHeight / b.count).toFixed(1)),
-              }));
+  const bucketData = useCachedQuery<{ heights: number[]; axisLabels?: string[] }>(
+    workspaceId ? `health-buckets:${workspaceId}:${range}` : null,
+    async () => {
+      const isAll = workspaceId === ALL_WORKSPACES_ID;
+      const rows = isAll
+        ? await client.data.PubHealthBucket.select([
+            "bucket_index",
+            "bucket_start",
+            "height_pct",
+            "status",
+          ])
+            .where({ range: { eq: range } })
+            .first(1000)
+            .execute()
+        : await client.data.PubHealthBucket.select([
+            "bucket_index",
+            "bucket_start",
+            "height_pct",
+            "status",
+          ])
+            .where({ workspace_id: { eq: workspaceId! }, range: { eq: range } })
+            .execute();
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return EMPTY_STRIP_BUCKETS;
+      }
+      let sorted: Array<{ bucket_index: number; bucket_start: unknown; height_pct: number }>;
+      if (isAll) {
+        const byIdx = new Map<
+          number,
+          { bucket_index: number; bucket_start: unknown; sumHeight: number; count: number }
+        >();
+        for (const r of rows) {
+          const idx = Number(r.bucket_index);
+          const h = Number(r.height_pct);
+          const prev = byIdx.get(idx);
+          if (!prev) {
+            byIdx.set(idx, {
+              bucket_index: idx,
+              bucket_start: r.bucket_start,
+              sumHeight: h,
+              count: 1,
+            });
           } else {
-            sorted = [...rows]
-              .sort((a, b) => a.bucket_index - b.bucket_index)
-              .slice(-40);
+            prev.sumHeight += h;
+            prev.count += 1;
           }
-          setLiveHeights(sorted.map((r) => Number(r.height_pct)));
-          const fmtTime = (raw: unknown) => {
-            const d = new Date(String(raw ?? ""));
-            if (Number.isNaN(d.getTime())) return "";
-            return d.toISOString().slice(11, 16) + " UTC";
-          };
-          if (sorted.length <= 2) {
-            setLiveAxisLabels([
+        }
+        sorted = [...byIdx.values()]
+          .sort((a, b) => a.bucket_index - b.bucket_index)
+          .slice(-40)
+          .map((b) => ({
+            bucket_index: b.bucket_index,
+            bucket_start: b.bucket_start,
+            height_pct: Number((b.sumHeight / b.count).toFixed(1)),
+          }));
+      } else {
+        sorted = [...rows]
+          .sort((a, b) => a.bucket_index - b.bucket_index)
+          .slice(-40);
+      }
+      const heights = sorted.map((r) => Number(r.height_pct));
+      const fmtTime = (raw: unknown) => {
+        const d = new Date(String(raw ?? ""));
+        if (Number.isNaN(d.getTime())) return "";
+        return d.toISOString().slice(11, 16) + " UTC";
+      };
+      const axisLabels =
+        sorted.length <= 2
+          ? [
               `${sorted.length} run${sorted.length === 1 ? "" : "s"} recorded`,
               "now (" + fmtTime(sorted[sorted.length - 1]?.bucket_start) + ")",
-            ]);
-          } else {
-            const pickIndices = [
-              0,
-              Math.floor((sorted.length - 1) * 0.25),
-              Math.floor((sorted.length - 1) * 0.5),
-              Math.floor((sorted.length - 1) * 0.75),
-            ];
-            setLiveAxisLabels([
-              ...pickIndices.map((idx) => fmtTime(sorted[idx]?.bucket_start)),
+            ]
+          : [
+              ...[
+                0,
+                Math.floor((sorted.length - 1) * 0.25),
+                Math.floor((sorted.length - 1) * 0.5),
+                Math.floor((sorted.length - 1) * 0.75),
+              ].map((idx) => fmtTime(sorted[idx]?.bucket_start)),
               "now",
-            ]);
-          }
-        } else {
-          setLiveHeights([]);
-          setLiveAxisLabels(undefined);
-        }
-        if (Array.isArray(distRows) && distRows.length > 0) {
-          const totals = distRows.reduce(
-            (acc, d) => ({
-              healthy: acc.healthy + Number(d.healthy ?? 0),
-              warning: acc.warning + Number(d.warning ?? 0),
-              critical: acc.critical + Number(d.critical ?? 0),
-              total: acc.total + Number(d.total ?? 0),
-            }),
-            { healthy: 0, warning: 0, critical: 0, total: 0 }
-          );
-          setLiveDistribution(totals);
-        } else {
-          setLiveDistribution(LIVE_EMPTY_DISTRIBUTION);
-        }
-      } catch {
-        if (!cancelled) {
-          setLiveHeights([]);
-          setLiveAxisLabels(undefined);
-          setLiveDistribution(LIVE_EMPTY_DISTRIBUTION);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, range, refreshTick]);
+            ];
+      return { heights, axisLabels };
+    },
+    EMPTY_STRIP_BUCKETS,
+    refreshTick
+  );
 
-  const heights = liveHeights;
-  const distribution = liveDistribution;
+  const distribution: HealthDistributionFixture =
+    assets.length > 0
+      ? {
+          healthy: assets.filter((a) => a.status === "healthy").length,
+          warning: assets.filter((a) => a.status === "warning").length,
+          critical: assets.filter((a) => a.status === "critical").length,
+          total: assets.length,
+        }
+      : LIVE_EMPTY_DISTRIBUTION;
+
+  const heights = bucketData.heights;
   const computedStates = evaluateStickStates(heights, thresholds);
 
   const bars: HealthBarFixture[] = heights.map((h, i) => ({
@@ -445,120 +323,92 @@ export function useHealthStrip(range: TimeRange = "24h"): {
     heights,
     bars,
     bucketStates: computedStates,
-    axisLabels: liveAxisLabels,
+    axisLabels: bucketData.axisLabels,
     distribution,
   };
 }
 
 export function useSchemaChanges(limit: number = 10): SchemaChangeFixture[] {
   const { workspaceId, refreshTick } = useWorkspace();
-  const [liveChanges, setLiveChanges] = useState<SchemaChangeFixture[]>([]);
 
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const baseQuery = client.data.PubSchemaChange.select([
-          "asset_key",
-          "change_kind",
-          "column_name",
-          "detail",
-          "changed_at",
-          "is_breaking",
-        ]);
-        const rows =
-          workspaceId === ALL_WORKSPACES_ID
-            ? await baseQuery.first(limit).execute()
-            : await baseQuery
-                .where({ workspace_id: { eq: workspaceId } })
-                .first(limit)
-                .execute();
-        if (cancelled) return;
-        if (Array.isArray(rows) && rows.length > 0) {
-          setLiveChanges(
-            rows.map((r) => ({
-              kind: (r.change_kind as SchemaChangeFixture["kind"]) ?? "changed",
-              icon:
-                r.change_kind === "added"
-                  ? "ph-plus"
-                  : r.change_kind === "dropped"
-                    ? "ph-minus"
-                    : "ph-pencil-simple",
-              col: r.column_name,
-              detail: r.detail,
-              time: r.changed_at ? String(r.changed_at) : "Recently",
-              breaking: Boolean(r.is_breaking),
-            }))
-          );
-        } else {
-          setLiveChanges([]);
-        }
-      } catch {
-        if (!cancelled) setLiveChanges([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, limit, refreshTick]);
-
-  return liveChanges;
+  return useCachedQuery<SchemaChangeFixture[]>(
+    workspaceId ? `schema-changes:${workspaceId}:${limit}` : null,
+    async () => {
+      const baseQuery = client.data.PubSchemaChange.select([
+        "asset_key",
+        "change_kind",
+        "column_name",
+        "detail",
+        "changed_at",
+        "is_breaking",
+      ]);
+      const rows =
+        workspaceId === ALL_WORKSPACES_ID
+          ? await baseQuery.first(limit).execute()
+          : await baseQuery
+              .where({ workspace_id: { eq: workspaceId! } })
+              .first(limit)
+              .execute();
+      if (!Array.isArray(rows) || rows.length === 0) return [];
+      return rows.map((r) => ({
+        kind: (r.change_kind as SchemaChangeFixture["kind"]) ?? "changed",
+        icon:
+          r.change_kind === "added"
+            ? "ph-plus"
+            : r.change_kind === "dropped"
+              ? "ph-minus"
+              : "ph-pencil-simple",
+        col: r.column_name,
+        detail: r.detail,
+        time: r.changed_at ? String(r.changed_at) : "Recently",
+        breaking: Boolean(r.is_breaking),
+      }));
+    },
+    EMPTY_SCHEMA_CHANGES,
+    refreshTick
+  );
 }
 
 export function useLastPublishRun(): { label: string; shortLabel: string; status: string } {
   const { refreshTick } = useWorkspace();
-  const [info, setInfo] = useState<{ label: string; shortLabel: string; status: string }>({
-    label: "recently",
-    shortLabel: "Live telemetry",
-    status: "Succeeded",
-  });
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const rows = await client.data.PubPublishRun.select([
-          "ended_at",
-          "started_at",
-          "status",
-        ])
-          .first(10)
-          .execute();
-        if (cancelled || !Array.isArray(rows) || rows.length === 0) return;
-        const sorted = [...rows].sort((a, b) =>
-          String(b.ended_at ?? b.started_at ?? "").localeCompare(
-            String(a.ended_at ?? a.started_at ?? "")
-          )
-        );
-        const latest = sorted[0];
-        const tsRaw = String(latest.ended_at ?? latest.started_at ?? "");
-        const dt = new Date(tsRaw);
-        if (!Number.isNaN(dt.getTime())) {
-          const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
-          const rel =
-            diffMin < 1
-              ? "just now"
-              : diffMin < 60
-                ? `${diffMin}m ago (${dt.toISOString().slice(11, 16)} UTC)`
-                : `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago (${dt.toISOString().slice(0, 16).replace("T", " ")} UTC)`;
-          const shortRel =
-            diffMin < 1
-              ? "Synced just now"
-              : diffMin < 60
-                ? `Synced ${diffMin}m ago`
-                : `Synced ${Math.floor(diffMin / 60)}h ago`;
-          setInfo({ label: rel, shortLabel: shortRel, status: String(latest.status ?? "Succeeded") });
-        }
-      } catch {
-        // ignore offline/test errors
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshTick]);
-
-  return info;
+  return useCachedQuery<{ label: string; shortLabel: string; status: string }>(
+    "last-publish-run",
+    async () => {
+      const rows = await client.data.PubPublishRun.select([
+        "ended_at",
+        "started_at",
+        "status",
+      ])
+        .first(10)
+        .execute();
+      if (!Array.isArray(rows) || rows.length === 0) return DEFAULT_PUBLISH_RUN_INFO;
+      const sorted = [...rows].sort((a, b) =>
+        String(b.ended_at ?? b.started_at ?? "").localeCompare(
+          String(a.ended_at ?? a.started_at ?? "")
+        )
+      );
+      const latest = sorted[0];
+      const tsRaw = String(latest.ended_at ?? latest.started_at ?? "");
+      const dt = new Date(tsRaw);
+      if (Number.isNaN(dt.getTime())) return DEFAULT_PUBLISH_RUN_INFO;
+      const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
+      const rel =
+        diffMin < 1
+          ? "just now"
+          : diffMin < 60
+            ? `${diffMin}m ago (${dt.toISOString().slice(11, 16)} UTC)`
+            : `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago (${dt.toISOString().slice(0, 16).replace("T", " ")} UTC)`;
+      const shortRel =
+        diffMin < 1
+          ? "Synced just now"
+          : diffMin < 60
+            ? `Synced ${diffMin}m ago`
+            : `Synced ${Math.floor(diffMin / 60)}h ago`;
+      return { label: rel, shortLabel: shortRel, status: String(latest.status ?? "Succeeded") };
+    },
+    DEFAULT_PUBLISH_RUN_INFO,
+    refreshTick
+  );
 }
 

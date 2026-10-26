@@ -59,14 +59,17 @@ export function Quality() {
         ? selectedAssetKey
         : (firstWithFailure?.name ?? selectableAssets[0]?.name ?? '*');
 
+  const evaluatedAssets = assets.filter((a) => a.quality >= 0);
   const avgQuality =
-    assets.length > 0
-      ? Math.round((assets.reduce((acc, a) => acc + (a.quality ?? 100), 0) / assets.length) * 10) / 10
-      : 100;
+    evaluatedAssets.length > 0
+      ? Math.round(
+          (evaluatedAssets.reduce((acc, a) => acc + a.quality, 0) / evaluatedAssets.length) * 10,
+        ) / 10
+      : null;
   const totalRules = allUserRules.length;
   const totalPass = allUserRules.filter((r) => r.is_active).length;
   const failingRulesCount = Math.max(0, totalRules - totalPass);
-  const healthyAssetsCount = assets.filter((a) => (a.quality ?? 100) >= 95).length;
+  const healthyAssetsCount = evaluatedAssets.filter((a) => a.quality >= 95).length;
 
   const activeNavMeta = QUALITY_NAV_ITEMS.find((i) => i.id === activeView) ?? QUALITY_NAV_ITEMS[0];
 
@@ -170,19 +173,33 @@ export function Quality() {
               </div>
               <div style={css('display:flex;align-items:baseline;justify-content:space-between;margin-top:8px;')}>
                 <div style={css("font-size:26px;font-weight:700;color:var(--fg);font-family:'Geist Mono',monospace;")}>
-                  {avgQuality.toFixed(1)}%
+                  {avgQuality !== null ? `${avgQuality.toFixed(1)}%` : 'N/A'}
                 </div>
                 <span
                   style={badge(
-                    avgQuality >= 95 ? 'var(--ok)' : avgQuality >= 83 ? 'var(--warn)' : 'var(--crit)',
-                    avgQuality >= 95 ? 'var(--okb)' : avgQuality >= 83 ? 'var(--warnb)' : 'var(--critb)',
+                    avgQuality === null
+                      ? 'var(--fgm)'
+                      : avgQuality >= 95
+                        ? 'var(--ok)'
+                        : avgQuality >= 83
+                          ? 'var(--warn)'
+                          : 'var(--crit)',
+                    avgQuality === null
+                      ? 'var(--card2)'
+                      : avgQuality >= 95
+                        ? 'var(--okb)'
+                        : avgQuality >= 83
+                          ? 'var(--warnb)'
+                          : 'var(--critb)',
                   )}
                 >
-                  {avgQuality >= 95 ? 'OK' : avgQuality >= 83 ? 'Degraded' : 'Breach'}
+                  {avgQuality === null ? 'No rules' : avgQuality >= 95 ? 'OK' : avgQuality >= 83 ? 'Degraded' : 'Breach'}
                 </span>
               </div>
               <div style={css('font-size:12px;color:var(--fgs);margin-top:4px;')}>
-                Across {assets.length} monitored assets
+                {evaluatedAssets.length > 0
+                  ? `Across ${evaluatedAssets.length} table${evaluatedAssets.length === 1 ? '' : 's'} with active rules`
+                  : 'Apply quality rules to calculate score'}
               </div>
             </div>
 

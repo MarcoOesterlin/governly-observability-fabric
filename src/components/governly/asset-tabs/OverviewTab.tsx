@@ -84,10 +84,16 @@ export function OverviewTab({
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;padding:16px;box-shadow:var(--shadow);')}>
           <div style={css('font-size:12px;color:var(--fgm);font-weight:500;')}>Quality checks</div>
           <div style={css("font-size:26px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);margin-top:8px;")}>
-            {passCount}<span style={css('font-size:14px;color:var(--fgs);')}>/{qualityRules.length} pass</span>
+            {qualityRules.length > 0 ? (
+              <>
+                {passCount}<span style={css('font-size:14px;color:var(--fgs);')}>/{qualityRules.length} pass</span>
+              </>
+            ) : (
+              <span style={css('color:var(--fgs);')}>N/A</span>
+            )}
           </div>
-          <div style={css(`font-size:11.5px;color:${failCount > 0 ? 'var(--crit)' : 'var(--ok)'};margin-top:3px;`)}>
-            {failCount} failing · {warnCount} warning
+          <div style={css(`font-size:11.5px;color:${qualityRules.length === 0 ? 'var(--fgs)' : failCount > 0 ? 'var(--crit)' : 'var(--ok)'};margin-top:3px;`)}>
+            {qualityRules.length === 0 ? 'No quality rules applied yet' : `${failCount} failing · ${warnCount} warning`}
           </div>
         </div>
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;padding:16px;box-shadow:var(--shadow);')}>

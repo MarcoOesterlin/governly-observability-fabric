@@ -92,8 +92,8 @@ export function AssetsCard({ assets, totalCount = 169 }: { assets: AssetFixture[
               <div style={css('flex:1;height:5px;border-radius:99px;background:var(--card2,#f4f4f5);overflow:hidden;')}>
                 <div style={css(`width:${na ? '0%' : `${a.quality}%`};height:100%;background:${qColor(a.quality)};border-radius:99px;`)} />
               </div>
-              <span style={css("font-size:12px;font-family:'Geist Mono',monospace;font-weight:500;color:var(--fg);min-width:24px;text-align:right;")}>
-                {na ? '—' : a.quality}
+              <span style={css(`font-size:12px;font-family:'Geist Mono',monospace;font-weight:500;color:${na ? 'var(--fgs,#a1a1aa)' : 'var(--fg)'};min-width:28px;text-align:right;`)}>
+                {na ? 'N/A' : `${a.quality}%`}
               </span>
             </div>
             <i className="ph ph-caret-right" style={css('font-size:13px;color:var(--fgs);')} aria-hidden="true" />
