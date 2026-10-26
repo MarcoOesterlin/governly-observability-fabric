@@ -319,9 +319,7 @@ def ensure_notebook_schedule(
     _, existing_resp, _ = fabric_request("GET", sched_url, token)
     schedules = existing_resp.get("value", [])
     now_utc = datetime.now(timezone.utc)
-    # Round up to the next 5-minute boundary with :00 seconds so the Fabric Portal Schedule UI renders cleanly
-    mins_to_add = 5 - (now_utc.minute % 5)
-    start_dt = (now_utc + timedelta(minutes=mins_to_add)).replace(second=0, microsecond=0)
+    start_dt = (now_utc + timedelta(minutes=interval_minutes)).replace(second=0, microsecond=0)
     end_dt = (start_dt + timedelta(days=365)).replace(second=0, microsecond=0)
     start_str = start_dt.strftime("%Y-%m-%dT%H:%M:00")
     end_str = end_dt.strftime("%Y-%m-%dT%H:%M:00")
@@ -337,10 +335,10 @@ def ensure_notebook_schedule(
     }
     if schedules:
         sched_id = schedules[0]["id"]
-        print(f"Updating existing schedule ({sched_id}) -> enabled every {interval_minutes}m (start {start_str} UTC)...")
+        print(f"Updating existing schedule ({sched_id}) -> enabled every {interval_minutes}m (first scheduled run at {start_str} UTC)...")
         fabric_request("PATCH", f"{sched_url}/{sched_id}", token, config_payload)
     else:
-        print(f"Creating {interval_minutes}-minute recurring schedule on {notebook_id} (start {start_str} UTC)...")
+        print(f"Creating {interval_minutes}-minute recurring schedule on {notebook_id} (first scheduled run at {start_str} UTC)...")
         fabric_request("POST", sched_url, token, config_payload)
 
 
@@ -348,44 +346,15 @@ def trigger_notebook_run(
     workspace_id: str,
     notebook_id: str,
     token: str,
-    repo_dir: str,
-    sql_server: str,
-    sql_database: str,
 ) -> None:
-    nb_py_path = os.path.join(repo_dir, "fabric", "notebooks", "nb_governly_compute_publish.py")
-    if os.path.isfile(nb_py_path) and "spark" in globals():
-        print("Running initial telemetry discovery & SQL publish directly in active Spark session...")
-        with open(nb_py_path, "r", encoding="utf-8") as f:
-            code = f.read()
-        code = re.sub(
-            r'^APP_SQL_SERVER\s*=.*$',
-            f'APP_SQL_SERVER = "{sql_server}"',
-            code,
-            flags=re.MULTILINE,
-        )
-        code = re.sub(
-            r'^APP_SQL_DATABASE\s*=.*$',
-            f'APP_SQL_DATABASE = "{sql_database}"',
-            code,
-            flags=re.MULTILINE,
-        )
-        exec_globals = dict(globals())
-        exec_globals["APP_SQL_SERVER"] = sql_server
-        exec_globals["APP_SQL_DATABASE"] = sql_database
-        exec(compile(code, nb_py_path, "exec"), exec_globals)
-        print("In-process telemetry publish completed!")
-
     run_url = (
         f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}"
         f"/items/{notebook_id}/jobs/instances?jobType=RunNotebook"
     )
-    print(f"Queueing background RunNotebook job on nb_governly_compute_publish ({notebook_id})...")
-    try:
-        status, _, headers = fabric_request("POST", run_url, token, {})
-        loc = headers.get("location")
-        print(f"Background RunNotebook job queued (HTTP {status}, location={loc}).")
-    except Exception as exc:
-        print(f"Note: background RunNotebook queue returned: {exc}")
+    print(f"Triggering initial RunNotebook job on nb_governly_compute_publish ({notebook_id})...")
+    status, _, headers = fabric_request("POST", run_url, token, {})
+    loc = headers.get("location")
+    print(f"Initial RunNotebook job queued (HTTP {status}, location={loc}) — will start as soon as installer releases Spark session.")
 
 
 # %%
@@ -410,9 +379,15 @@ if "spark" in globals() or os.environ.get("GOVERNLY_BOOTSTRAP_RUN") == "1":
     print(f"Resolved Workspace SQL Database: server={sql_server}, database={sql_database}")
 
     nb_id = upsert_compute_notebook(target_ws, token, work_dir, sql_server, sql_database)
-    ensure_notebook_schedule(target_ws, nb_id, token, SCHEDULE_INTERVAL_MINUTES)
 
     if TRIGGER_INITIAL_RUN:
-        trigger_notebook_run(target_ws, nb_id, token, work_dir, sql_server, sql_database)
+        trigger_notebook_run(target_ws, nb_id, token)
 
-    print("=== Governly Installation / Update Complete! ===")
+    ensure_notebook_schedule(target_ws, nb_id, token, SCHEDULE_INTERVAL_MINUTES)
+
+    print("=== Governly Installation / Update Complete! Stopping installer session so nb_governly_compute_publish runs immediately. ===")
+    try:
+        import notebookutils  # type: ignore
+        notebookutils.session.stop()
+    except Exception:
+        pass
