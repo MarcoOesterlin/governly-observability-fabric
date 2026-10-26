@@ -21,7 +21,7 @@ export const DARK_VARS: Record<string, string> = {
 };
 
 export const ACCENT = '#4f46e5';
-const STORAGE_KEY = 'governly-theme';
+const STORAGE_KEY = 'governly-theme-v2';
 
 type Theme = 'light' | 'dark';
 type ThemeValue = { theme: Theme; toggle: () => void; setTheme: (t: Theme) => void; vars: Record<string, string> };
@@ -32,7 +32,7 @@ function initial(): Theme {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored === 'light' || stored === 'dark') return stored;
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return 'light';
   } catch {
     return 'light';
   }

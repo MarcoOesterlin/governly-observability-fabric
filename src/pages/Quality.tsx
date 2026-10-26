@@ -48,7 +48,7 @@ export function Quality() {
   const [selectedAssetKey, setSelectedAssetKey] = useState<string>('*');
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const firstWithFailure = selectableAssets.find(
-    (a) => (a.qualityPass ?? 0) < (a.qualityTotal ?? 0) || a.quality < 100,
+    (a) => (a.qualityPass ?? 0) < (a.qualityTotal ?? 0) || (a.quality >= 0 && a.quality < 100),
   );
   const targetAssetKey =
     selectedAssetKey === '*'
@@ -319,8 +319,8 @@ export function Quality() {
                     </div>
                   </div>
                   <span style={css('font-size:12.5px;color:var(--fgm);')}>{a.domain}</span>
-                  <span style={css("font-size:13px;font-weight:600;color:var(--fg);font-family:'Geist Mono',monospace;")}>
-                    {a.quality.toFixed(1)}%
+                  <span style={css(`font-size:13px;font-weight:600;color:${a.quality < 0 ? 'var(--fgs,#a1a1aa)' : 'var(--fg)'};font-family:'Geist Mono',monospace;`)}>
+                    {a.quality < 0 ? 'N/A' : `${a.quality.toFixed(1)}%`}
                   </span>
                   <span style={css("font-size:12.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>
                     {qTot === 0 ? '0 rules configured' : `${qPass}/${qTot} active`}
