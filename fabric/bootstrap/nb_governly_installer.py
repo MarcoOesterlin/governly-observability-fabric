@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tarfile
@@ -40,39 +41,45 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$")
+
 
 def get_fabric_token() -> str:
     for mod_name in ("notebookutils", "mssparkutils"):
         try:
             mod = __import__(mod_name)
-            return mod.credentials.getToken("https://api.fabric.microsoft.com")
+            return str(mod.credentials.getToken("https://api.fabric.microsoft.com"))
         except Exception:
             continue
     raise RuntimeError("Could not acquire Fabric API token from notebookutils.credentials.")
 
 
 def detect_workspace_id(override: str = "") -> str:
-    if override and override.strip():
+    if override and _GUID_RE.match(override.strip()):
         return override.strip()
-    for mod_name in ("notebookutils", "mssparkutils"):
-        try:
-            mod = __import__(mod_name)
-            ctx = mod.runtime.context
-            wid = ctx.get("currentWorkspaceId") if isinstance(ctx, dict) else getattr(ctx, "currentWorkspaceId", None)
-            if wid:
-                return str(wid)
-        except Exception:
-            continue
     try:
         from pyspark.sql import SparkSession
         spark = SparkSession.getActiveSession()
         if spark:
-            wid = spark.conf.get("trident.workspace.id", "")
-            if wid:
-                return str(wid)
+            wid = str(spark.conf.get("trident.workspace.id", "")).strip()
+            if _GUID_RE.match(wid):
+                return wid
     except Exception:
         pass
-    raise RuntimeError("Could not auto-detect WORKSPACE_ID; please set WORKSPACE_ID parameter.")
+    for mod_name in ("notebookutils", "mssparkutils"):
+        try:
+            mod = __import__(mod_name)
+            ctx = mod.runtime.context
+            for getter in (lambda c: c.get("currentWorkspaceId"), lambda c: c["currentWorkspaceId"]):
+                try:
+                    val = str(getter(ctx) or "").strip()
+                    if _GUID_RE.match(val):
+                        return val
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    raise RuntimeError("Could not auto-detect a valid GUID for WORKSPACE_ID; please set WORKSPACE_ID parameter.")
 
 
 def fabric_request(
