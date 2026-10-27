@@ -7,7 +7,11 @@ import {
   useAssetSchema,
   type FailedRowItem,
 } from '../../../data/useAsset';
-import { useQualityRules } from '../../../data/useQualityRules';
+import {
+  DATA_QUALITY_DIMENSIONS,
+  isQualityRuleDeleted,
+  useQualityRules,
+} from '../../../data/useQualityRules';
 import { QualityRuleStudio } from '../QualityRuleStudio';
 import type { QualityRuleFixture } from '../../../fixtures/types';
 
@@ -48,6 +52,7 @@ export function QualityTab({
   const { columns: schemaCols } = useAssetSchema(isAllTables ? undefined : assetKey);
   const {
     rules: userRules,
+    actionFeedback,
     seedDefaultRules,
     toggleRuleActive,
     deleteRule,
@@ -57,7 +62,7 @@ export function QualityTab({
   const [showStudio, setShowStudio] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
-  const displayRules: Array<
+  const rawDisplayRules: Array<
     QualityRuleFixture & {
       id?: string;
       assetKey?: string;
@@ -88,8 +93,16 @@ export function QualityTab({
           };
         })
       : !isAllTables
-      ? livePubResults
+      ? livePubResults.map((pr) => ({
+          ...pr,
+          id: `pub-${pr.name}`,
+          editable: false,
+        }))
       : [];
+
+  const displayRules = rawDisplayRules.filter(
+    (r) => !isQualityRuleDeleted(r.id, r.name),
+  );
 
   const passCount = displayRules.filter((r) => r.result !== 'fail').length;
 
@@ -139,19 +152,33 @@ export function QualityTab({
       {showRulesCard && (
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
           <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;')}>
-            <div style={css('font-size:14px;font-weight:600;color:var(--fg);')}>Quality rules</div>
+            <div style={css('display:flex;align-items:center;gap:10px;flex-wrap:wrap;')}>
+              <div style={css('font-size:14px;font-weight:600;color:var(--fg);')}>Quality rules</div>
+              {actionFeedback && (
+                <span
+                  role="status"
+                  style={css(
+                    'font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--okb,#f0fdf4);color:var(--ok,#16a34a);border:1px solid var(--ok,#16a34a);',
+                  )}
+                >
+                  {actionFeedback}
+                </span>
+              )}
+            </div>
             <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
               <span style={css('font-size:12.5px;color:var(--fgm);')}>
                 {passCount} of {displayRules.length} passing
               </span>
-              {propRules === undefined && displayRules.length === 0 && (
+              {propRules === undefined && (
                 <button
                   type="button"
-                  onClick={() => void seedDefaultRules(assetKey, schemaCols[0]?.col ?? 'id')}
+                  onClick={() =>
+                    void seedDefaultRules(assetKey, schemaCols[0]?.col ?? 'id', schemaCols)
+                  }
                   style={{ ...btnSecondary, height: 28, padding: '0 10px', fontSize: 12 }}
                 >
                   <i className="ph ph-magic-wand" aria-hidden="true" />
-                  Add Default Rules (Editable)
+                  Add {DATA_QUALITY_DIMENSIONS.length} DQ Dimension Rules
                 </button>
               )}
               <button
@@ -177,10 +204,10 @@ export function QualityTab({
               <div style={css('font-size:13.5px;font-weight:600;color:var(--fg);')}>
                 No quality rules configured for <span style={css("font-family:'Geist Mono',monospace;")}>{assetKey}</span> yet
               </div>
-              <div style={css('font-size:12.5px;color:var(--fgm);max-width:520px;')}>
-                Create your own Spark SQL rules from scratch or load editable default rules (Completeness &amp; Key Uniqueness) that you can customize or delete anytime.
+              <div style={css('font-size:12.5px;color:var(--fgm);max-width:560px;')}>
+                Create custom Spark SQL rules from scratch or load the 7 standard Data Quality Dimensions (Completeness, Uniqueness, Validity, Accuracy, Consistency, Timeliness, Referential Integrity) that you can edit or delete anytime.
               </div>
-              <div style={css('display:flex;align-items:center;gap:10px;margin-top:4px;')}>
+              <div style={css('display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap;justify-content:center;')}>
                 <button
                   type="button"
                   onClick={() => {
@@ -200,11 +227,13 @@ export function QualityTab({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void seedDefaultRules(assetKey, schemaCols[0]?.col ?? 'id')}
+                  onClick={() =>
+                    void seedDefaultRules(assetKey, schemaCols[0]?.col ?? 'id', schemaCols)
+                  }
                   style={{ ...btnSecondary, height: 32, padding: '0 12px', fontSize: 12.5 }}
                 >
                   <i className="ph ph-magic-wand" aria-hidden="true" />
-                  Load Default Rules (Editable)
+                  Load {DATA_QUALITY_DIMENSIONS.length} DQ Dimension Rules (Editable)
                 </button>
               </div>
             </div>
@@ -271,16 +300,18 @@ export function QualityTab({
                           >
                             {q.isActive ? 'Pause' : 'Enable'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => void deleteRule(q.id!)}
-                            style={css(
-                              'padding:3px 8px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);font-size:11.5px;color:var(--crit);cursor:pointer;',
-                            )}
-                          >
-                            Delete
-                          </button>
                         </>
+                      )}
+                      {propRules === undefined && (
+                        <button
+                          type="button"
+                          onClick={() => void deleteRule(q.id ?? `pub-${q.name}`, q.name)}
+                          style={css(
+                            'padding:3px 8px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);font-size:11.5px;color:var(--crit);cursor:pointer;',
+                          )}
+                        >
+                          Delete
+                        </button>
                       )}
                     </div>
                   </div>

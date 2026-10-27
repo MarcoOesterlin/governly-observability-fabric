@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { AssetsCard } from '../components/governly/AssetsCard';
-import { useAssets } from '../data/useAssets';
+import { isRuntimeOnlyAssetType, useAssets } from '../data/useAssets';
 import type { AssetFixture } from '../fixtures/types';
 import { css } from '../lib/css';
 
 export function Assets({ assets: propAssets }: { assets?: AssetFixture[] } = {}) {
   const { rows: liveAssets } = useAssets();
   const baseAssets = (propAssets ?? liveAssets).filter(
-    (a) => a.type !== 'Spark notebook' && a.type.toLowerCase() !== 'dataagent'
+    (a) => !isRuntimeOnlyAssetType(a.type) && a.type.toLowerCase() !== 'dataagent'
   );
   const [query, setQuery] = useState('');
   const filtered = baseAssets.filter(
@@ -23,9 +23,9 @@ export function Assets({ assets: propAssets }: { assets?: AssetFixture[] } = {})
       </div>
       <div style={css('display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap;')}>
         <div>
-          <div style={css('font-size:22px;font-weight:600;letter-spacing:-0.02em;color:var(--fg,#18181b);')}>Monitored assets</div>
+          <div style={css('font-size:22px;font-weight:600;letter-spacing:-0.02em;color:var(--fg,#18181b);')}>Monitored Data Assets</div>
           <div style={css('font-size:13.5px;color:var(--fgm,#52525b);margin-top:4px;')}>
-            Catalog of monitored tables, semantic models, pipelines and eventstreams.
+            Catalog of monitored Lakehouse tables, semantic models, and data products. (Pipelines and notebooks are tracked in Pipelines &amp; Freshness.)
           </div>
         </div>
         <input

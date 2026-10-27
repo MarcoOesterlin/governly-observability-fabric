@@ -952,12 +952,11 @@ def discover_and_profile_live_fabric(
             continue
         wid = str(w["id"])
         w_name = str(w.get("displayName") or wid)
-        if (
+        is_host_ws = (
             (host_ws_id and wid.lower() == host_ws_id)
             or wid.lower() == "062bb73c-70f7-4d21-84c4-715a9dac1dba"
             or w_name.lower().startswith("governly-observability")
-        ):
-            continue
+        )
         cid = str(w.get("capacityId") or "").lower()
         if not cid:
             continue
@@ -967,7 +966,8 @@ def discover_and_profile_live_fabric(
             "name": w_name,
             "capacity_id": w.get("capacityId"),
             "capacity_sku": cap_sku.get(cid, "F2"),
-            "is_monitored": wid not in excluded_ws_ids,
+            "is_monitored": (not is_host_ws) and (wid not in excluded_ws_ids),
+            "is_host_ws": is_host_ws,
             "capacity_active": is_cap_active,
         })
         try:
@@ -1028,9 +1028,8 @@ def discover_and_profile_live_fabric(
     default_steward_name = users_by_id.get(default_steward_id, {}).get("display_name", "Workspace Steward")
 
     for w in workspaces:
-        if not w.get("is_monitored", True):
-            continue
         wid = w["workspace_id"]
+        scan_data_assets = bool(w.get("is_monitored", True)) and not bool(w.get("is_host_ws", False))
         ws_steward_id = next(
             (a["object_id"] for a in access_rows if a["workspace_id"] == wid),
             default_steward_id,
@@ -1048,20 +1047,27 @@ def discover_and_profile_live_fabric(
         lakehouses = [
             i
             for i in items
-            if i.get("type") == "Lakehouse"
+            if scan_data_assets
+            and i.get("type") == "Lakehouse"
             and not str(i.get("displayName") or "").endswith("_Staging")
             and str(i.get("displayName") or "") != "lh_governly"
         ]
-        models = [i for i in items if i.get("type") == "SemanticModel" and not str(i.get("displayName") or "").endswith("_Staging")]
-        reports = [i for i in items if i.get("type") == "Report"]
-        pipelines = [i for i in items if i.get("type") == "DataPipeline"]
-        notebooks = [
+        models = [
             i
             for i in items
-            if i.get("type") == "Notebook"
-            and not str(i.get("displayName") or "").startswith("nb_governly_")
+            if scan_data_assets
+            and i.get("type") == "SemanticModel"
+            and not str(i.get("displayName") or "").endswith("_Staging")
         ]
-        ai_items = [i for i in items if i.get("type") in ("MLModel", "MLExperiment")]
+        reports = [i for i in items if scan_data_assets and i.get("type") == "Report"]
+        # Always profile DataPipeline and Notebook runs across ALL workspaces (including host and excluded workspaces)
+        pipelines = [i for i in items if i.get("type") == "DataPipeline"]
+        notebooks = [i for i in items if i.get("type") == "Notebook"]
+        ai_items = [
+            i
+            for i in items
+            if scan_data_assets and i.get("type") in ("MLModel", "MLExperiment")
+        ]
 
         ws_domains_seen: dict[str, str] = {}
         table_schemas_by_short: dict[str, list[tuple[str, str, list[tuple[str, str]]]]] = {}
@@ -1244,7 +1250,8 @@ def discover_and_profile_live_fabric(
                 matching_user_rules = [
                     ur
                     for ur in (custom_rules or [])
-                    if str(ur.get("rule_type") or "") != "freshness_sla"
+                    if str(ur.get("rule_type") or "") not in ("freshness_sla", "compute_config", "workspace_monitor")
+                    and not str(ur.get("asset_key") or "").startswith("__")
                     and (not ur.get("workspace_id") or ur["workspace_id"] == wid or ur["workspace_id"] == "all")
                     and ur.get("asset_key") in (asset_key, table_name, "*")
                 ]
@@ -1777,10 +1784,11 @@ def discover_and_profile_live_fabric(
             })
 
     ws_with_assets = {a["workspace_id"] for a in assets}
-    workspaces.sort(key=lambda w: (0 if w["workspace_id"] in ws_with_assets else 1, w["name"]))
+    non_host_workspaces = [w for w in workspaces if not w.get("is_host_ws", False)]
+    non_host_workspaces.sort(key=lambda w: (0 if w["workspace_id"] in ws_with_assets else 1, w["name"]))
 
     return {
-        "workspaces": workspaces,
+        "workspaces": non_host_workspaces,
         "access": access_rows,
         "users": list(users_by_id.values()),
         "groups": list(groups_by_id.values()),

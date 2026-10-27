@@ -10,14 +10,16 @@ const memoryCache = new Map<string, CacheEntry<unknown>>();
 const inflightMap = new Map<string, Promise<unknown>>();
 const keyListeners = new Map<string, Set<() => void>>();
 
-const SESSION_PREFIX = "governly:qcache:v1:";
+const SESSION_PREFIX = "governly:qcache:v2:";
 
 function readEntry<T>(key: string): CacheEntry<T> | undefined {
   const mem = memoryCache.get(key) as CacheEntry<T> | undefined;
   if (mem) return mem;
   if (typeof window !== "undefined") {
     try {
-      const raw = window.sessionStorage.getItem(SESSION_PREFIX + key);
+      const raw =
+        window.localStorage.getItem(SESSION_PREFIX + key) ??
+        window.sessionStorage.getItem(SESSION_PREFIX + key);
       if (raw) {
         const parsed = JSON.parse(raw) as CacheEntry<T>;
         if (parsed && "value" in parsed) {
@@ -37,7 +39,8 @@ function writeEntry<T>(key: string, value: T, tick: number): void {
   memoryCache.set(key, entry);
   if (typeof window !== "undefined") {
     try {
-      window.sessionStorage.setItem(SESSION_PREFIX + key, JSON.stringify(entry));
+      const serialized = JSON.stringify(entry);
+      window.localStorage.setItem(SESSION_PREFIX + key, serialized);
     } catch {
       // ignore quota errors
     }
@@ -54,6 +57,21 @@ export function invalidateQueryCache(prefix?: string): void {
       const cur = memoryCache.get(key);
       if (cur) {
         memoryCache.set(key, { ...cur, updatedAt: 0, tick: -1 });
+      }
+    }
+  }
+}
+
+export function updateQueryCache<T>(
+  prefix: string,
+  updater: (prev: T) => T
+): void {
+  for (const key of Array.from(memoryCache.keys())) {
+    if (key.startsWith(prefix)) {
+      const cur = memoryCache.get(key) as CacheEntry<T> | undefined;
+      if (cur) {
+        const nextVal = updater(cur.value);
+        writeEntry(key, nextVal, cur.tick);
       }
     }
   }

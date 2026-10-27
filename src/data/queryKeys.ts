@@ -4,6 +4,8 @@ export interface AssetFilter {
   search?: string;
   domain?: string;
   status?: string;
+  assetType?: string;
+  includeRuntime?: boolean;
 }
 
 export interface IncidentFilter {

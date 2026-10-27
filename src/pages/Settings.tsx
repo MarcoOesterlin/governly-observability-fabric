@@ -30,11 +30,14 @@ export function Settings() {
     config: computeConfig,
     allWorkspaces,
     savingSchedule,
+    savingWorkspaces,
+    hasUnsavedWorkspaces,
     triggering,
     jobStatus,
     statusMessage,
     toggleWorkspaceIncluded,
     setAllWorkspacesIncluded,
+    applyWorkspacesToSchedule,
     updateSchedule,
     saveNotebookParams,
     triggerComputeNow,
@@ -174,42 +177,115 @@ export function Settings() {
               )}
             >
               {savingSchedule
-                ? 'Saving…'
+                ? 'Updating Schedule…'
                 : computeConfig.scheduleEnabled
-                  ? 'Schedule: ON (Click to Pause)'
-                  : 'Enable Recurring Schedule'}
+                  ? `Schedule: ON · ${includedCount} Workspaces (Click to Pause)`
+                  : `Enable Recurring Schedule (${includedCount} Workspaces)`}
             </button>
           </div>
         </div>
 
         <div style={css('border-top:1px solid var(--border,#e7e7ea);padding-top:14px;display:flex;flex-direction:column;gap:10px;')}>
-          <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;')}>
+          <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;')}>
             <div>
-              <div style={css('font-size:13px;font-weight:600;color:var(--fg);')}>
-                Monitored Workspaces ({includedCount} of {workspaceChoices.length} included)
+              <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+                <span style={css('font-size:13px;font-weight:600;color:var(--fg);')}>
+                  Monitored Workspaces ({includedCount} of {workspaceChoices.length} included)
+                </span>
+                <span
+                  style={css(
+                    `font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:${
+                      hasUnsavedWorkspaces
+                        ? 'var(--warnb,#fffbeb)'
+                        : computeConfig.scheduleEnabled
+                          ? 'var(--okb,#f0fdf4)'
+                          : 'var(--card2,#f4f4f5)'
+                    };color:${
+                      hasUnsavedWorkspaces
+                        ? 'var(--warn,#d97706)'
+                        : computeConfig.scheduleEnabled
+                          ? 'var(--ok,#16a34a)'
+                          : 'var(--fgm,#52525b)'
+                    };border:1px solid ${
+                      hasUnsavedWorkspaces
+                        ? 'var(--warn,#d97706)'
+                        : computeConfig.scheduleEnabled
+                          ? 'var(--ok,#16a34a)'
+                          : 'var(--border,#e7e7ea)'
+                    };`,
+                  )}
+                >
+                  {hasUnsavedWorkspaces
+                    ? 'Pending changes · click "Add Workspaces to Recurring" to apply'
+                    : computeConfig.scheduleEnabled
+                      ? `✓ All ${includedCount} selected workspaces synced to recurring (${computeConfig.intervalMinutes}m)`
+                      : `✓ ${includedCount} workspaces saved for next notebook run`}
+                </span>
               </div>
               <div style={css('font-size:12px;color:var(--fgm);margin-top:2px;')}>
-                Unchecked workspaces are excluded from OneLake Delta table scanning, quality evaluation, and dashboard views to reduce Spark compute time and cost.
+                Unchecked workspaces are excluded from OneLake Delta table scanning and Data Quality evaluation to reduce Spark compute cost. (Pipeline &amp; Notebook runs remain visible in Pipelines &amp; Freshness.)
               </div>
             </div>
-            {workspaceChoices.length > 1 && (
-              <div style={css('display:flex;gap:6px;')}>
+            <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;')}>
+              {workspaceChoices.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void setAllWorkspacesIncluded(true)}
+                    style={css('height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--fg);font-size:11.5px;font-weight:600;cursor:pointer;')}
+                  >
+                    Include all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void setAllWorkspacesIncluded(false)}
+                    style={css('height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--fgm);font-size:11.5px;font-weight:500;cursor:pointer;')}
+                  >
+                    First only
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                disabled={savingWorkspaces}
+                onClick={() => void applyWorkspacesToSchedule(true, false)}
+                style={css(
+                  `height:30px;padding:0 12px;border-radius:6px;border:1px solid ${
+                    hasUnsavedWorkspaces || !computeConfig.scheduleEnabled
+                      ? 'var(--accent,#4f46e5)'
+                      : 'var(--ok,#16a34a)'
+                  };background:${
+                    hasUnsavedWorkspaces || !computeConfig.scheduleEnabled
+                      ? 'var(--accent,#4f46e5)'
+                      : 'var(--okb,#f0fdf4)'
+                  };color:${
+                    hasUnsavedWorkspaces || !computeConfig.scheduleEnabled
+                      ? '#fff'
+                      : 'var(--ok,#16a34a)'
+                  };font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;`,
+                )}
+              >
+                {savingWorkspaces
+                  ? `Adding ${includedCount} Workspaces to Recurring…`
+                  : hasUnsavedWorkspaces
+                    ? `Add ${includedCount} Workspaces to Recurring (${computeConfig.intervalMinutes}m)`
+                    : computeConfig.scheduleEnabled
+                      ? `✓ ${includedCount} Workspaces in Recurring (${computeConfig.intervalMinutes}m)`
+                      : `Add ${includedCount} Workspaces to Recurring (${computeConfig.intervalMinutes}m)`}
+              </button>
+              {hasUnsavedWorkspaces && (
                 <button
                   type="button"
-                  onClick={() => void setAllWorkspacesIncluded(true)}
-                  style={css('height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--fg);font-size:11.5px;font-weight:600;cursor:pointer;')}
+                  disabled={savingWorkspaces || triggering}
+                  onClick={() => void applyWorkspacesToSchedule(true, true)}
+                  style={css(
+                    'height:30px;padding:0 12px;border-radius:6px;border:1px solid var(--accent,#4f46e5);background:var(--card,#fff);color:var(--accent,#4f46e5);font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;',
+                  )}
                 >
-                  Include all
+                  Add &amp; Run Notebook Now
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void setAllWorkspacesIncluded(false)}
-                  style={css('height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--card2);color:var(--fgm);font-size:11.5px;font-weight:500;cursor:pointer;')}
-                >
-                  First only
-                </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {workspaceChoices.length === 0 ? (

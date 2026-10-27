@@ -1,19 +1,271 @@
 import { useState } from 'react';
+import { useInRouterContext, useNavigate } from 'react-router-dom';
 import { css } from '../../../lib/css';
 import { badge } from '../primitives';
 import {
   useAsset,
   useAssetFreshness,
+  useAssetLineage,
   useJobFailureDiagnostics,
   type JobFailureDiagnostic,
 } from '../../../data/useAsset';
+import { useAssets, useRuntimeAssets, type AssetItem } from '../../../data/useAssets';
 import {
   formatSlaMinutes,
   SLA_PRESETS,
   useFreshnessSlas,
 } from '../../../data/useFreshnessSla';
 import { useIncidents } from '../../../data/useIncidents';
-import type { RefreshRunFixture } from '../../../fixtures/types';
+import type { LineageNodeFixture, RefreshRunFixture } from '../../../fixtures/types';
+
+export interface AffectedObjectItem {
+  name: string;
+  type: string;
+  icon: string;
+  impactLabel: string;
+  navigable: boolean;
+}
+
+function iconForType(type: string): string {
+  const lower = type.toLowerCase();
+  if (lower.includes('notebook')) return 'ph-notebook';
+  if (lower.includes('pipeline')) return 'ph-flow-arrow';
+  if (lower.includes('semantic')) return 'ph-cube';
+  if (lower.includes('lakehouse') && !lower.includes('table')) return 'ph-warehouse';
+  return 'ph-table';
+}
+
+export function resolveActivityImpact(
+  activity: { name: string; type: string; domain?: string; workspaceId?: string },
+  allCatalog: AssetItem[],
+  explicitLineage?: { upstream: LineageNodeFixture[]; downstream: LineageNodeFixture[] },
+): {
+  upstream: AffectedObjectItem[];
+  downstream: AffectedObjectItem[];
+} {
+  const actName = activity.name || '';
+  const actLower = actName.toLowerCase();
+  const domainPrefix = actName.includes('.') ? actName.split('.')[0].toLowerCase() : '';
+  const actDomain = (activity.domain || '').toLowerCase();
+
+  const sameScope = allCatalog.filter((item) => {
+    if (item.name === actName) return false;
+    const itemPrefix = item.name.includes('.') ? item.name.split('.')[0].toLowerCase() : '';
+    if (activity.workspaceId && item.workspaceId && activity.workspaceId === item.workspaceId) {
+      return true;
+    }
+    if (domainPrefix && itemPrefix === domainPrefix) return true;
+    if (actDomain && item.domain.toLowerCase() === actDomain) return true;
+    return false;
+  });
+
+  const upstreamMap = new Map<string, AffectedObjectItem>();
+  const downstreamMap = new Map<string, AffectedObjectItem>();
+
+  if (explicitLineage) {
+    for (const u of explicitLineage.upstream) {
+      upstreamMap.set(u.name, {
+        name: u.name,
+        type: u.type,
+        icon: iconForType(u.type),
+        impactLabel: 'Upstream source',
+        navigable: allCatalog.some((a) => a.name === u.name),
+      });
+    }
+    for (const d of explicitLineage.downstream) {
+      downstreamMap.set(d.name, {
+        name: d.name,
+        type: d.type,
+        icon: iconForType(d.type),
+        impactLabel: 'Downstream broken / stale',
+        navigable: allCatalog.some((a) => a.name === d.name),
+      });
+    }
+  }
+
+  // Special case: Governly observability compute or installer notebooks
+  if (actLower.includes('nb_governly')) {
+    const tablesAndModels = allCatalog.filter(
+      (a) => a.type === 'Lakehouse table' || a.type === 'Semantic model',
+    );
+    for (const src of tablesAndModels.slice(0, 4)) {
+      upstreamMap.set(src.name, {
+        name: src.name,
+        type: src.type,
+        icon: iconForType(src.type),
+        impactLabel: 'OneLake / Fabric source read',
+        navigable: true,
+      });
+    }
+    for (const target of tablesAndModels.slice(0, 6)) {
+      downstreamMap.set(target.name, {
+        name: target.name,
+        type: target.type,
+        icon: iconForType(target.type),
+        impactLabel: 'Freshness & DQ telemetry stale',
+        navigable: true,
+      });
+    }
+    if (downstreamMap.size === 0) {
+      downstreamMap.set('governly.PubAssets & PubQualityResults', {
+        name: 'governly.PubAssets & PubQualityResults',
+        type: 'SQL Telemetry Tables',
+        icon: 'ph-database',
+        impactLabel: 'Observability metrics not updated',
+        navigable: false,
+      });
+    }
+    return {
+      upstream: Array.from(upstreamMap.values()),
+      downstream: Array.from(downstreamMap.values()),
+    };
+  }
+
+  const isPipeline = activity.type === 'Data pipeline';
+  const isNotebook = activity.type === 'Spark notebook';
+
+  if (isPipeline) {
+    // Upstream of a pipeline: Lakehouse / raw sources in the workspace
+    const lakehouses = sameScope.filter(
+      (a) => a.type === 'Lakehouse' || a.name.toLowerCase().includes('raw') || a.name.toLowerCase().includes('events'),
+    );
+    for (const lh of lakehouses.slice(0, 3)) {
+      upstreamMap.set(lh.name, {
+        name: lh.name,
+        type: lh.type,
+        icon: iconForType(lh.type),
+        impactLabel: 'Ingestion source',
+        navigable: true,
+      });
+    }
+    if (upstreamMap.size === 0) {
+      upstreamMap.set(`${domainPrefix || 'workspace'}.onelake_landing_zone`, {
+        name: `${domainPrefix || 'workspace'}.onelake_landing_zone`,
+        type: 'OneLake Files / Source',
+        icon: 'ph-folder-open',
+        impactLabel: 'Upstream source feed',
+        navigable: false,
+      });
+    }
+
+    // Downstream of a pipeline: Spark notebooks, Lakehouse tables, and Semantic models in the workspace
+    const notebooks = sameScope.filter((a) => a.type === 'Spark notebook');
+    const tables = sameScope.filter((a) => a.type === 'Lakehouse table');
+    const models = sameScope.filter((a) => a.type === 'Semantic model');
+    for (const nb of notebooks) {
+      downstreamMap.set(nb.name, {
+        name: nb.name,
+        type: nb.type,
+        icon: 'ph-notebook',
+        impactLabel: 'Blocked transform activity',
+        navigable: true,
+      });
+    }
+    for (const tbl of tables.slice(0, 6)) {
+      downstreamMap.set(tbl.name, {
+        name: tbl.name,
+        type: tbl.type,
+        icon: 'ph-table',
+        impactLabel: 'Table stale / unrefreshed',
+        navigable: true,
+      });
+    }
+    for (const sm of models) {
+      downstreamMap.set(sm.name, {
+        name: sm.name,
+        type: sm.type,
+        icon: 'ph-cube',
+        impactLabel: 'Semantic model / BI stale',
+        navigable: true,
+      });
+    }
+  } else if (isNotebook) {
+    // Upstream of a notebook: Data pipelines and source tables/lakehouses in the workspace
+    const pipelines = sameScope.filter((a) => a.type === 'Data pipeline');
+    const lakehouses = sameScope.filter((a) => a.type === 'Lakehouse');
+    const tables = sameScope.filter((a) => a.type === 'Lakehouse table');
+    for (const pl of pipelines) {
+      upstreamMap.set(pl.name, {
+        name: pl.name,
+        type: pl.type,
+        icon: 'ph-flow-arrow',
+        impactLabel: 'Orchestrating pipeline',
+        navigable: true,
+      });
+    }
+    for (const lh of lakehouses.slice(0, 2)) {
+      upstreamMap.set(lh.name, {
+        name: lh.name,
+        type: lh.type,
+        icon: 'ph-warehouse',
+        impactLabel: 'Source Lakehouse',
+        navigable: true,
+      });
+    }
+    if (upstreamMap.size === 0 && tables.length > 0) {
+      const srcTbl = tables[0];
+      upstreamMap.set(srcTbl.name, {
+        name: srcTbl.name,
+        type: srcTbl.type,
+        icon: 'ph-table',
+        impactLabel: 'Source Delta table',
+        navigable: true,
+      });
+    }
+
+    // Downstream of a notebook: Target Lakehouse tables and Semantic models in the workspace
+    const models = sameScope.filter((a) => a.type === 'Semantic model');
+    for (const tbl of tables.slice(0, 6)) {
+      downstreamMap.set(tbl.name, {
+        name: tbl.name,
+        type: tbl.type,
+        icon: 'ph-table',
+        impactLabel: 'Target table possibly broken / stale',
+        navigable: true,
+      });
+    }
+    for (const sm of models) {
+      downstreamMap.set(sm.name, {
+        name: sm.name,
+        type: sm.type,
+        icon: 'ph-cube',
+        impactLabel: 'Semantic model / BI stale',
+        navigable: true,
+      });
+    }
+  } else {
+    // Table or Semantic model failure/breach
+    const jobs = sameScope.filter(
+      (a) => a.type === 'Data pipeline' || a.type === 'Spark notebook',
+    );
+    for (const j of jobs) {
+      upstreamMap.set(j.name, {
+        name: j.name,
+        type: j.type,
+        icon: iconForType(j.type),
+        impactLabel: 'Upstream producer job',
+        navigable: true,
+      });
+    }
+    const models = sameScope.filter(
+      (a) => a.type === 'Semantic model' && a.name !== actName,
+    );
+    for (const sm of models) {
+      downstreamMap.set(sm.name, {
+        name: sm.name,
+        type: sm.type,
+        icon: 'ph-cube',
+        impactLabel: 'Downstream semantic model impacted',
+        navigable: true,
+      });
+    }
+  }
+
+  return {
+    upstream: Array.from(upstreamMap.values()),
+    downstream: Array.from(downstreamMap.values()),
+  };
+}
 
 export function buildFallbackJobDiagnostic(
   assetName: string,
@@ -108,7 +360,16 @@ export function FreshnessTab({
   assetKey: string;
   runs?: RefreshRunFixture[];
 }) {
+  const inRouter = useInRouterContext();
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const routerNavigate = inRouter ? useNavigate() : null;
+  const navigate = (to: string) => {
+    if (routerNavigate) routerNavigate(to);
+  };
   const asset = useAsset(assetKey);
+  const { allRows: dataAssets } = useAssets({ includeRuntime: true });
+  const { rows: runtimeAssets } = useRuntimeAssets();
+  const explicitLineage = useAssetLineage(assetKey);
   const { runs: liveRuns, lagPoints, lagLabels } = useAssetFreshness(assetKey);
   const jobDiagnostics = useJobFailureDiagnostics(assetKey);
   const allIncidents = useIncidents();
@@ -121,6 +382,11 @@ export function FreshnessTab({
   const slaLabel = formatSlaMinutes(slaMin);
   const midAxisLabel = formatSlaMinutes(Math.round(slaMin * 1.5));
   const topAxisLabel = formatSlaMinutes(Math.round(slaMin * 2));
+
+  const combinedCatalog = Array.from(
+    new Map([...dataAssets, ...runtimeAssets].map((a) => [a.name, a])).values(),
+  );
+  const impact = resolveActivityImpact(asset, combinedCatalog, explicitLineage);
 
   const assetIncident = allIncidents.find(
     (i) =>
@@ -313,6 +579,78 @@ export function FreshnessTab({
                   </div>
                 </div>
               </div>
+
+              {(impact.upstream.length > 0 || impact.downstream.length > 0) && (
+                <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:14px;padding-top:4px;')}>
+                  <div style={css('padding:12px 14px;border-radius:8px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);')}>
+                    <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--fgm,#52525b);margin-bottom:8px;display:flex;align-items:center;gap:6px;')}>
+                      <i className="ph ph-arrow-circle-up-left" style={css('font-size:14px;')} aria-hidden="true" />
+                      Upstream Sources &amp; Triggers ({impact.upstream.length})
+                    </div>
+                    {impact.upstream.length === 0 ? (
+                      <div style={css('font-size:12px;color:var(--fgs);')}>No upstream dependencies detected.</div>
+                    ) : (
+                      <div style={css('display:flex;flex-direction:column;gap:6px;')}>
+                        {impact.upstream.map((u) => (
+                          <div
+                            key={u.name}
+                            onClick={() => {
+                              if (u.navigable) navigate(`/assets/${u.name}`);
+                            }}
+                            style={css(
+                              `display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:6px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);cursor:${u.navigable ? 'pointer' : 'default'};`,
+                            )}
+                          >
+                            <div style={css('display:flex;align-items:center;gap:7px;min-width:0;')}>
+                              <i className={`ph ${u.icon}`} style={css('font-size:14px;color:var(--fgm);')} aria-hidden="true" />
+                              <span style={css("font-size:12px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;")}>
+                                {u.name}
+                              </span>
+                            </div>
+                            <span style={css('font-size:11px;color:var(--fgm);white-space:nowrap;')}>
+                              {u.type} · {u.impactLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={css('padding:12px 14px;border-radius:8px;background:var(--critb,#fef2f2);border:1px solid var(--crit,#dc2626);')}>
+                    <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--crit,#dc2626);margin-bottom:8px;display:flex;align-items:center;gap:6px;')}>
+                      <i className="ph ph-warning-diamond" style={css('font-size:14px;')} aria-hidden="true" />
+                      Downstream Objects Affected &amp; Possibly Broken ({impact.downstream.length})
+                    </div>
+                    {impact.downstream.length === 0 ? (
+                      <div style={css('font-size:12px;color:var(--fgm);')}>No downstream objects detected.</div>
+                    ) : (
+                      <div style={css('display:flex;flex-direction:column;gap:6px;')}>
+                        {impact.downstream.map((d) => (
+                          <div
+                            key={d.name}
+                            onClick={() => {
+                              if (d.navigable) navigate(`/assets/${d.name}`);
+                            }}
+                            style={css(
+                              `display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border-radius:6px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);cursor:${d.navigable ? 'pointer' : 'default'};`,
+                            )}
+                          >
+                            <div style={css('display:flex;align-items:center;gap:7px;min-width:0;')}>
+                              <i className={`ph ${d.icon}`} style={css('font-size:14px;color:var(--crit,#dc2626);')} aria-hidden="true" />
+                              <span style={css("font-size:12px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;")}>
+                                {d.name}
+                              </span>
+                            </div>
+                            <span style={badge('var(--crit)', 'var(--critb)')}>
+                              {d.impactLabel}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -143,7 +143,14 @@ export function WorkspaceProvider({
       ),
     [activeWorkspaces, persistedWorkspaceId]
   );
-  const [workspaceId, setWorkspaceIdState] = useState<string | null>(initial.workspaceId);
+  const [workspaceId, setWorkspaceIdState] = useState<string | null>(() => {
+    if (initialOptions !== undefined) return initial.workspaceId;
+    if (initial.workspaceId) return initial.workspaceId;
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem(STORAGE_KEY) || ALL_WORKSPACES_ID;
+    }
+    return ALL_WORKSPACES_ID;
+  });
   const [selectedDomain, setSelectedDomainState] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return window.localStorage.getItem(DOMAIN_STORAGE_KEY) || "All";

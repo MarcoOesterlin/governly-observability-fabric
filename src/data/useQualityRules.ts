@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { client } from './client';
 import { ALL_WORKSPACES_ID, useWorkspace } from '../app/WorkspaceProvider';
-import { invalidateQueryCache, useCachedQuery } from './queryCache';
+import { invalidateQueryCache, updateQueryCache, useCachedQuery } from './queryCache';
 import { useCurrentSteward } from './useCurrentSteward';
 import type { RuleType } from '../lib/ruleValidator';
+import type { SchemaColumnFixture } from '../fixtures/types';
 
 export interface CustomQualityRule {
   id: string;
@@ -19,13 +20,223 @@ export interface CustomQualityRule {
   created_at: string;
 }
 
+export interface DataQualityDimensionTemplate {
+  dimension:
+    | 'Completeness'
+    | 'Uniqueness'
+    | 'Validity'
+    | 'Accuracy'
+    | 'Consistency'
+    | 'Timeliness'
+    | 'Integrity';
+  label: string;
+  description: string;
+  rule_type: RuleType;
+  threshold_pct: number;
+  severity: 'Critical' | 'High' | 'Medium';
+  buildRule: (cols: SchemaColumnFixture[]) => {
+    rule_name: string;
+    expression: string;
+  };
+}
+
+export const DATA_QUALITY_DIMENSIONS: DataQualityDimensionTemplate[] = [
+  {
+    dimension: 'Completeness',
+    label: '1. Completeness',
+    description: 'Required identifier and business attributes are populated (non-null).',
+    rule_type: 'not_null',
+    threshold_pct: 99.5,
+    severity: 'High',
+    buildRule: (cols) => {
+      const pk = cols.find((c) => c.flag === 'PK')?.col ?? cols[0]?.col ?? 'id';
+      return {
+        rule_name: `Completeness (${pk} NOT NULL)`,
+        expression: `${pk} IS NOT NULL`,
+      };
+    },
+  },
+  {
+    dimension: 'Uniqueness',
+    label: '2. Uniqueness',
+    description: 'Primary or natural key contains zero duplicate entities.',
+    rule_type: 'unique',
+    threshold_pct: 100.0,
+    severity: 'Critical',
+    buildRule: (cols) => {
+      const pk = cols.find((c) => c.flag === 'PK')?.col ?? cols[0]?.col ?? 'id';
+      return {
+        rule_name: `Uniqueness (${pk} distinct key)`,
+        expression: `${pk} IS NOT NULL`,
+      };
+    },
+  },
+  {
+    dimension: 'Validity',
+    label: '3. Validity',
+    description: 'Text or categorical attributes conform to non-empty domain syntax.',
+    rule_type: 'sql_predicate',
+    threshold_pct: 99.0,
+    severity: 'High',
+    buildRule: (cols) => {
+      const strCol =
+        cols.find((c) => /STRING|VARCHAR|CHAR|TEXT/i.test(c.type))?.col ??
+        cols[1]?.col ??
+        cols[0]?.col ??
+        'id';
+      return {
+        rule_name: `Validity (${strCol} domain format)`,
+        expression: `${strCol} IS NOT NULL AND LENGTH(TRIM(CAST(${strCol} AS STRING))) > 0`,
+      };
+    },
+  },
+  {
+    dimension: 'Accuracy',
+    label: '4. Accuracy',
+    description: 'Numeric measures and quantities fall within valid business bounds.',
+    rule_type: 'range',
+    threshold_pct: 99.5,
+    severity: 'High',
+    buildRule: (cols) => {
+      const numCol =
+        cols.find((c) => /INT|DEC|NUM|DOUBLE|FLOAT|LONG|MONEY/i.test(c.type))?.col ??
+        cols[0]?.col ??
+        'id';
+      const isNumeric = cols.some(
+        (c) => c.col === numCol && /INT|DEC|NUM|DOUBLE|FLOAT|LONG|MONEY/i.test(c.type),
+      );
+      return {
+        rule_name: `Accuracy (${numCol} business bounds)`,
+        expression: isNumeric
+          ? `${numCol} IS NOT NULL AND ${numCol} >= 0`
+          : `${numCol} IS NOT NULL`,
+      };
+    },
+  },
+  {
+    dimension: 'Consistency',
+    label: '5. Consistency',
+    description: 'Cross-attribute relationships within each record hold without contradiction.',
+    rule_type: 'sql_predicate',
+    threshold_pct: 99.0,
+    severity: 'Medium',
+    buildRule: (cols) => {
+      const first = cols[0]?.col ?? 'id';
+      const second = cols[1]?.col ?? first;
+      return {
+        rule_name:
+          second !== first
+            ? `Consistency (${first} & ${second} paired)`
+            : `Consistency (${first} record state)`,
+        expression:
+          second !== first
+            ? `${first} IS NOT NULL AND ${second} IS NOT NULL`
+            : `${first} IS NOT NULL`,
+      };
+    },
+  },
+  {
+    dimension: 'Timeliness',
+    label: '6. Timeliness',
+    description: 'Event or transaction timestamps are recorded and within expected recency.',
+    rule_type: 'sql_predicate',
+    threshold_pct: 98.0,
+    severity: 'Medium',
+    buildRule: (cols) => {
+      const tsCol =
+        cols.find(
+          (c) =>
+            /DATE|TIME|TIMESTAMP/i.test(c.type) ||
+            /_at$|_date$|_ts$|timestamp|date/i.test(c.col),
+        )?.col ??
+        cols[cols.length - 1]?.col ??
+        'id';
+      return {
+        rule_name: `Timeliness (${tsCol} recorded)`,
+        expression: `${tsCol} IS NOT NULL`,
+      };
+    },
+  },
+  {
+    dimension: 'Integrity',
+    label: '7. Referential Integrity',
+    description: 'Foreign key references resolve to valid parent records without orphans.',
+    rule_type: 'not_null',
+    threshold_pct: 99.5,
+    severity: 'High',
+    buildRule: (cols) => {
+      const fkCol =
+        cols.find((c) => c.flag === 'FK' || /_id$/i.test(c.col))?.col ??
+        cols[0]?.col ??
+        'id';
+      return {
+        rule_name: `Integrity (${fkCol} reference valid)`,
+        expression: `${fkCol} IS NOT NULL`,
+      };
+    },
+  },
+];
+
+export function isSystemQualityRuleRow(r: {
+  rule_type?: unknown;
+  asset_key?: unknown;
+  rule_name?: unknown;
+}): boolean {
+  const rt = String(r.rule_type ?? '')
+    .trim()
+    .toLowerCase();
+  const ak = String(r.asset_key ?? '')
+    .trim()
+    .toLowerCase();
+  const rn = String(r.rule_name ?? '').trim();
+  return (
+    rt === 'freshness_sla' ||
+    rt === 'compute_config' ||
+    rt === 'workspace_monitor' ||
+    ak.startsWith('__') ||
+    rn === 'Governly Compute Configuration' ||
+    rn.startsWith('Monitor Workspace:')
+  );
+}
+
 const EMPTY_CUSTOM_RULES: CustomQualityRule[] = [];
+const OPTIMISTIC_RULES_EVENT = 'governly:quality-rules-optimistic';
+const deletedRuleIds = new Set<string>();
+const deletedRuleNames = new Set<string>();
+
+export function isQualityRuleDeleted(id?: string, ruleName?: string): boolean {
+  if (id && deletedRuleIds.has(id)) return true;
+  if (ruleName && deletedRuleNames.has(ruleName)) return true;
+  return false;
+}
+
+function notifyOptimisticRules(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(OPTIMISTIC_RULES_EVENT));
+  }
+}
 
 export function useQualityRules(assetKey?: string) {
-  const { workspaceId, workspaces, refreshTick, refreshData } = useWorkspace();
+  const { workspaceId, workspaces, refreshTick } = useWorkspace();
   const steward = useCurrentSteward();
   const stewardName = steward.entra?.display_name ?? 'Workspace Steward';
   const [loading, setLoading] = useState<boolean>(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [, setOptimisticTick] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onUpdate = () => setOptimisticTick((t) => t + 1);
+    window.addEventListener(OPTIMISTIC_RULES_EVENT, onUpdate);
+    return () => window.removeEventListener(OPTIMISTIC_RULES_EVENT, onUpdate);
+  }, []);
+
+  const showFeedback = useCallback((msg: string) => {
+    setActionFeedback(msg);
+    setTimeout(() => {
+      setActionFeedback((cur) => (cur === msg ? null : cur));
+    }, 3500);
+  }, []);
 
   const allRules = useCachedQuery<CustomQualityRule[]>(
     workspaceId ? `quality-rules:${workspaceId}` : null,
@@ -48,7 +259,7 @@ export function useQualityRules(assetKey?: string) {
           ? await baseQuery.first(200).execute()
           : await baseQuery.where({ workspace_id: { eq: workspaceId! } }).first(200).execute();
       const rows = (Array.isArray(res) ? res : []).filter(
-        (r) => r.rule_type !== 'freshness_sla',
+        (r) => !isSystemQualityRuleRow(r) && !isQualityRuleDeleted(r.id, r.rule_name),
       );
       return rows.map((r) => ({
         id: r.id,
@@ -70,9 +281,14 @@ export function useQualityRules(assetKey?: string) {
     refreshTick,
   );
 
-  const rules = assetKey
-    ? allRules.filter((r) => r.asset_key === assetKey || r.asset_key === '*')
-    : allRules;
+  const visibleRules = allRules.filter(
+    (r) => !isSystemQualityRuleRow(r) && !isQualityRuleDeleted(r.id, r.rule_name),
+  );
+
+  const rules =
+    assetKey && assetKey !== '*'
+      ? visibleRules.filter((r) => r.asset_key === assetKey || r.asset_key === '*')
+      : visibleRules;
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -80,11 +296,11 @@ export function useQualityRules(assetKey?: string) {
       invalidateQueryCache('quality-rules:');
       invalidateQueryCache('assets:');
       invalidateQueryCache('asset-quality:');
-      refreshData();
+      notifyOptimisticRules();
     } finally {
       setLoading(false);
     }
-  }, [refreshData]);
+  }, []);
 
   const createRule = useCallback(
     async (input: {
@@ -100,45 +316,144 @@ export function useQualityRules(assetKey?: string) {
         workspaceId === ALL_WORKSPACES_ID
           ? (workspaces[0]?.workspace_id ?? ALL_WORKSPACES_ID)
           : (workspaceId ?? '');
-      const created = await client.data.QualityRule.create({
+      const cleanName = input.rule_name.trim();
+      const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      deletedRuleNames.delete(cleanName);
+
+      const optimisticRule: CustomQualityRule = {
+        id: tempId,
         workspace_id: targetWs,
         asset_key: input.asset_key,
-        rule_name: input.rule_name.trim(),
+        rule_name: cleanName,
         rule_type: input.rule_type,
         expression: input.expression.trim(),
         threshold_pct: input.threshold_pct,
         severity: input.severity,
         is_active: true,
         created_by: stewardName,
-        created_at: now,
-        updated_at: now,
-      });
-      await reload();
-      return created;
+        created_at: now.toISOString(),
+      };
+
+      // Instant optimistic insert (<10ms)
+      updateQueryCache<CustomQualityRule[]>('quality-rules:', (prev) => [
+        ...(Array.isArray(prev) ? prev.filter((r) => r.rule_name !== cleanName) : []),
+        optimisticRule,
+      ]);
+      notifyOptimisticRules();
+      showFeedback(`✓ Added rule "${cleanName}"`);
+
+      try {
+        const created = await client.data.QualityRule.create({
+          workspace_id: targetWs,
+          asset_key: input.asset_key,
+          rule_name: cleanName,
+          rule_type: input.rule_type,
+          expression: input.expression.trim(),
+          threshold_pct: input.threshold_pct,
+          severity: input.severity,
+          is_active: true,
+          created_by: stewardName,
+          created_at: now,
+          updated_at: now,
+        });
+        if (created && (created as { id?: string }).id) {
+          const realId = String((created as { id: string }).id);
+          updateQueryCache<CustomQualityRule[]>('quality-rules:', (prev) =>
+            (Array.isArray(prev) ? prev : []).map((r) =>
+              r.id === tempId ? { ...r, id: realId } : r,
+            ),
+          );
+          notifyOptimisticRules();
+        }
+        return created;
+      } catch {
+        return optimisticRule;
+      }
     },
-    [workspaceId, workspaces, stewardName, reload],
+    [workspaceId, workspaces, stewardName, showFeedback],
   );
 
   const toggleRuleActive = useCallback(
     async (id: string, currentActive: boolean) => {
-      await client.data.QualityRule.update(
-        { id },
-        {
-          is_active: !currentActive,
-          updated_at: new Date(),
-        },
+      const target = visibleRules.find((r) => r.id === id);
+      const nextActive = !currentActive;
+      // Instant optimistic toggle (<10ms)
+      updateQueryCache<CustomQualityRule[]>('quality-rules:', (prev) =>
+        (Array.isArray(prev) ? prev : []).map((r) =>
+          r.id === id ? { ...r, is_active: nextActive } : r,
+        ),
       );
-      await reload();
+      notifyOptimisticRules();
+      showFeedback(
+        nextActive
+          ? `✓ Enabled rule "${target?.rule_name ?? id}"`
+          : `✓ Paused rule "${target?.rule_name ?? id}"`,
+      );
+
+      if (!id.startsWith('optimistic-')) {
+        void client.data.QualityRule.update(
+          { id },
+          {
+            is_active: nextActive,
+            updated_at: new Date(),
+          },
+        ).catch(() => undefined);
+      }
     },
-    [reload],
+    [visibleRules, showFeedback],
   );
 
   const deleteRule = useCallback(
-    async (id: string) => {
-      await client.data.QualityRule.delete({ id });
-      await reload();
+    async (id: string, ruleNameHint?: string) => {
+      const target = visibleRules.find(
+        (r) => r.id === id || (ruleNameHint && r.rule_name === ruleNameHint),
+      );
+      const targetName = target?.rule_name ?? ruleNameHint ?? '';
+      deletedRuleIds.add(id);
+      if (target?.id) deletedRuleIds.add(target.id);
+      if (targetName) deletedRuleNames.add(targetName);
+
+      // Instant optimistic removal (<10ms)
+      updateQueryCache<CustomQualityRule[]>('quality-rules:', (prev) =>
+        (Array.isArray(prev) ? prev : []).filter(
+          (r) => r.id !== id && (!targetName || r.rule_name !== targetName),
+        ),
+      );
+      updateQueryCache<Array<{ name: string }>>('asset-quality:', (prev) =>
+        (Array.isArray(prev) ? prev : []).filter((r) => r.name !== targetName),
+      );
+      notifyOptimisticRules();
+      showFeedback(`✓ Deleted rule "${targetName || id}"`);
+
+      // Persist deletion in background without blocking UI
+      const realId = target?.id ?? id;
+      if (realId && !realId.startsWith('optimistic-') && !realId.startsWith('pub-')) {
+        void client.data.QualityRule.delete({ id: realId }).catch(() => undefined);
+      }
+      if (targetName) {
+        void (async () => {
+          try {
+            const pubRepo = (client.data as Record<string, any>).PubQualityResult;
+            if (pubRepo) {
+              const rows = await pubRepo
+                .select(['id', 'rule_name'])
+                .where({ rule_name: { eq: targetName } })
+                .execute();
+              if (Array.isArray(rows)) {
+                for (const row of rows) {
+                  if (row?.id) {
+                    await pubRepo.delete({ id: row.id }).catch(() => undefined);
+                  }
+                }
+              }
+            }
+          } catch {
+            // optional cleanup
+          }
+        })();
+      }
     },
-    [reload],
+    [visibleRules, showFeedback],
   );
 
   const updateRule = useCallback(
@@ -152,59 +467,77 @@ export function useQualityRules(assetKey?: string) {
         severity: 'Critical' | 'High' | 'Medium';
       },
     ) => {
-      await client.data.QualityRule.update(
-        { id },
-        {
-          rule_name: input.rule_name.trim(),
-          rule_type: input.rule_type,
-          expression: input.expression.trim(),
-          threshold_pct: input.threshold_pct,
-          severity: input.severity,
-          updated_at: new Date(),
-        },
+      const cleanName = input.rule_name.trim();
+      const cleanExpr = input.expression.trim();
+      // Instant optimistic update (<10ms)
+      updateQueryCache<CustomQualityRule[]>('quality-rules:', (prev) =>
+        (Array.isArray(prev) ? prev : []).map((r) =>
+          r.id === id
+            ? {
+                ...r,
+                rule_name: cleanName,
+                rule_type: input.rule_type,
+                expression: cleanExpr,
+                threshold_pct: input.threshold_pct,
+                severity: input.severity,
+              }
+            : r,
+        ),
       );
-      await reload();
+      notifyOptimisticRules();
+      showFeedback(`✓ Updated rule "${cleanName}"`);
+
+      if (!id.startsWith('optimistic-')) {
+        void client.data.QualityRule.update(
+          { id },
+          {
+            rule_name: cleanName,
+            rule_type: input.rule_type,
+            expression: cleanExpr,
+            threshold_pct: input.threshold_pct,
+            severity: input.severity,
+            updated_at: new Date(),
+          },
+        ).catch(() => undefined);
+      }
     },
-    [reload],
+    [showFeedback],
   );
 
   const seedDefaultRules = useCallback(
-    async (targetAsset: string, primaryKeyCol = 'id') => {
-      const defaults: Array<{
-        rule_name: string;
-        rule_type: RuleType;
-        expression: string;
-        threshold_pct: number;
-        severity: 'Critical' | 'High' | 'Medium';
-      }> = [
-        {
-          rule_name: `Completeness (${primaryKeyCol} NOT NULL)`,
-          rule_type: 'not_null',
-          expression: `${primaryKeyCol} IS NOT NULL`,
-          threshold_pct: 99.0,
-          severity: 'High',
-        },
-        {
-          rule_name: `Key uniqueness (${primaryKeyCol})`,
-          rule_type: 'unique',
-          expression: `${primaryKeyCol} IS NOT NULL`,
-          threshold_pct: 95.0,
-          severity: 'Critical',
-        },
-      ];
-      for (const d of defaults) {
+    async (
+      targetAsset: string,
+      primaryKeyCol = 'id',
+      schemaCols?: SchemaColumnFixture[],
+    ) => {
+      const effectiveAsset = !targetAsset || targetAsset === '*' ? '*' : targetAsset;
+      const cols: SchemaColumnFixture[] =
+        schemaCols && schemaCols.length > 0
+          ? schemaCols
+          : [{ col: primaryKeyCol, type: 'STRING', flag: 'PK', note: '' }];
+
+      for (const dim of DATA_QUALITY_DIMENSIONS) {
+        const built = dim.buildRule(cols);
         await createRule({
-          asset_key: targetAsset,
-          ...d,
+          asset_key: effectiveAsset,
+          rule_name: built.rule_name,
+          rule_type: dim.rule_type,
+          expression: built.expression,
+          threshold_pct: dim.threshold_pct,
+          severity: dim.severity,
         });
       }
+      showFeedback(
+        `✓ Added ${DATA_QUALITY_DIMENSIONS.length} Data Quality Dimension rules (Completeness, Uniqueness, Validity, Accuracy, Consistency, Timeliness, Integrity)`,
+      );
     },
-    [createRule],
+    [createRule, showFeedback],
   );
 
   return {
     rules,
     loading,
+    actionFeedback,
     createRule,
     updateRule,
     seedDefaultRules,

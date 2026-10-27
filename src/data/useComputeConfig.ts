@@ -7,9 +7,96 @@ import { useCurrentSteward } from './useCurrentSteward';
 export const DEFAULT_COMPUTE_CADENCE_MINUTES = 36;
 export const COMPUTE_CONFIG_EVENT = 'governly:compute-config-changed';
 export const ALL_WORKSPACES_EVENT = 'governly:all-workspaces-changed';
+export const LIVE_RUNTIME_JOBS_EVENT = 'governly:live-runtime-jobs-changed';
 const COMPUTE_CONFIG_STORAGE_KEY = 'governly:compute-config:v2';
+const SYNCED_EXCLUDED_STORAGE_KEY = 'governly:synced-excluded-ws:v1';
 const ALL_WORKSPACES_STORAGE_KEY = 'governly:all-workspaces:v1';
+const LIVE_RUNTIME_JOBS_STORAGE_KEY = 'governly:live-runtime-jobs:v1';
 const COMPUTE_CONFIG_RULE_ID = '00000000-0000-0000-0000-00000000c001';
+
+export interface LiveRuntimeJobRun {
+  run_id: string;
+  time: string;
+  lag: string;
+  lag_minutes: number;
+  rows: string;
+  result: 'ok' | 'breach';
+  label: string;
+}
+
+export interface LiveRuntimeJobDiagnostic {
+  id: string;
+  assetKey: string;
+  assetType: string;
+  runId: string;
+  statusLabel: 'Run Failed' | 'SLA Breach';
+  errorCode: string;
+  whyFailed: string;
+  possibleSolution: string;
+  detectedAt: string;
+}
+
+export interface LiveRuntimeJobItem {
+  workspace_id: string;
+  workspace_name: string;
+  asset_key: string;
+  name: string;
+  asset_type: 'Spark notebook' | 'Data pipeline';
+  status: 'healthy' | 'warning' | 'critical';
+  health_score: number;
+  freshness_label: string;
+  is_late: boolean;
+  sla_minutes: number;
+  fabric_item_url: string;
+  runs: LiveRuntimeJobRun[];
+  lag_points: number[];
+  diagnostics: LiveRuntimeJobDiagnostic[];
+}
+
+export function loadCachedRuntimeJobs(): LiveRuntimeJobItem[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LIVE_RUNTIME_JOBS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as LiveRuntimeJobItem[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCachedRuntimeJobs(items: LiveRuntimeJobItem[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LIVE_RUNTIME_JOBS_STORAGE_KEY, JSON.stringify(items));
+    window.dispatchEvent(new CustomEvent(LIVE_RUNTIME_JOBS_EVENT));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function loadSyncedExcludedIds(fallback: string[]): string[] {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(SYNCED_EXCLUDED_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as string[];
+    return Array.isArray(parsed) ? parsed.map(String) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveSyncedExcludedIds(ids: string[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const normalized = Array.from(new Set(ids.map(String))).sort();
+    window.localStorage.setItem(SYNCED_EXCLUDED_STORAGE_KEY, JSON.stringify(normalized));
+    window.dispatchEvent(new CustomEvent(COMPUTE_CONFIG_EVENT));
+  } catch {
+    // ignore
+  }
+}
 
 let localMutationSeq = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -173,7 +260,11 @@ export function useComputeConfig() {
   const { allWorkspaces, resolveWriteWorkspaceId, refreshData } = useWorkspace();
   const steward = useCurrentSteward();
   const [config, setConfig] = useState<ComputeConfigState>(loadLocalComputeConfig);
+  const [syncedExcludedIds, setSyncedExcludedIds] = useState<string[]>(() =>
+    loadSyncedExcludedIds(loadLocalComputeConfig().excludedWorkspaceIds),
+  );
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [savingWorkspaces, setSavingWorkspaces] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [jobStatus, setJobStatus] = useState<string>('Idle');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -182,7 +273,11 @@ export function useComputeConfig() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const onSync = () => setConfig(loadLocalComputeConfig());
+    const onSync = () => {
+      const latest = loadLocalComputeConfig();
+      setConfig(latest);
+      setSyncedExcludedIds(loadSyncedExcludedIds(latest.excludedWorkspaceIds));
+    };
     window.addEventListener(COMPUTE_CONFIG_EVENT, onSync);
     window.addEventListener('storage', onSync);
     return () => {
@@ -290,6 +385,7 @@ export function useComputeConfig() {
             );
             if (parsed.updatedAt >= local.updatedAt) {
               saveLocalComputeConfig(parsed, false);
+              saveSyncedExcludedIds(parsed.excludedWorkspaceIds);
             }
             return;
           } catch {
@@ -362,6 +458,17 @@ export function useComputeConfig() {
               const discovered = JSON.parse(res.workspacesJson) as WorkspaceOption[];
               if (Array.isArray(discovered) && discovered.length > 0) {
                 saveCachedAllWorkspaces(discovered, res.workspaceId);
+              }
+            } catch {
+              // ignore
+            }
+          }
+          const rawJobsJson = (res as unknown as { jobsJson?: string }).jobsJson;
+          if (rawJobsJson) {
+            try {
+              const parsedJobs = JSON.parse(rawJobsJson) as LiveRuntimeJobItem[];
+              if (Array.isArray(parsedJobs)) {
+                saveCachedRuntimeJobs(parsedJobs);
               }
             } catch {
               // ignore
@@ -449,20 +556,24 @@ export function useComputeConfig() {
 
       try {
         await persistConfigToSql(next);
+        saveSyncedExcludedIds(next.excludedWorkspaceIds);
         const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
-        const res = await client.functions.manageComputeNotebook.invoke({
+        await client.functions.manageComputeNotebook.invoke({
           hostWorkspaceId: hostWsId,
           action: 'schedule',
           scheduleEnabled,
           intervalMinutes: clamped,
         });
+        const sourceList = allWorkspaces.length > 0 ? allWorkspaces : loadCachedAllWorkspaces();
+        const exSet = new Set(next.excludedWorkspaceIds);
+        const incCount = sourceList.filter((w) => !exSet.has(w.workspace_id)).length;
         setStatusMessage(
-          res?.message ||
-            (scheduleEnabled
-              ? `Recurring compute schedule enabled (every ${clamped}m).`
-              : 'Recurring compute schedule paused.'),
+          scheduleEnabled
+            ? `✓ Recurring schedule active (every ${clamped}m) across ${incCount || sourceList.length} monitored workspace(s).`
+            : 'Recurring compute schedule paused.',
         );
       } catch {
+        saveSyncedExcludedIds(next.excludedWorkspaceIds);
         setStatusMessage(
           scheduleEnabled
             ? `Schedule preference saved (every ${clamped}m).`
@@ -472,7 +583,7 @@ export function useComputeConfig() {
         setSavingSchedule(false);
       }
     },
-    [persistConfigToSql, resolveWriteWorkspaceId],
+    [allWorkspaces, persistConfigToSql, resolveWriteWorkspaceId],
   );
 
   const saveNotebookParams = useCallback(
@@ -515,6 +626,7 @@ export function useComputeConfig() {
         updatedAt: Date.now(),
       };
       saveLocalComputeConfig(next, true);
+      saveSyncedExcludedIds(next.excludedWorkspaceIds);
       await persistConfigToSql(next).catch(() => undefined);
 
       const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
@@ -541,17 +653,137 @@ export function useComputeConfig() {
     }
   }, [persistConfigToSql, refreshData, resolveWriteWorkspaceId]);
 
+  const applyWorkspacesToSchedule = useCallback(
+    async (enableRecurring = true, runNow = false) => {
+      const current = loadLocalComputeConfig();
+      const nextScheduleEnabled = enableRecurring ? true : current.scheduleEnabled;
+      const next: ComputeConfigState = {
+        ...current,
+        scheduleEnabled: nextScheduleEnabled,
+        hasCompletedScan: runNow ? true : current.hasCompletedScan,
+        updatedAt: Date.now(),
+      };
+      saveLocalComputeConfig(next, true);
+      setSavingWorkspaces(true);
+      setStatusMessage(null);
+
+      const sourceList = allWorkspaces.length > 0 ? allWorkspaces : loadCachedAllWorkspaces();
+      const exSet = new Set(next.excludedWorkspaceIds);
+      const incCount = sourceList.filter((w) => !exSet.has(w.workspace_id)).length;
+      const totalCount = sourceList.length || incCount;
+
+      try {
+        await persistConfigToSql(next);
+        saveSyncedExcludedIds(next.excludedWorkspaceIds);
+        const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
+        if (nextScheduleEnabled) {
+          await client.functions.manageComputeNotebook
+            .invoke({
+              hostWorkspaceId: hostWsId,
+              action: 'schedule',
+              scheduleEnabled: true,
+              intervalMinutes: next.intervalMinutes,
+            })
+            .catch(() => undefined);
+        }
+        if (runNow) {
+          const trigRes = await client.functions.manageComputeNotebook.invoke({
+            hostWorkspaceId: hostWsId,
+            action: 'trigger',
+            scheduleEnabled: nextScheduleEnabled,
+            intervalMinutes: next.intervalMinutes,
+          });
+          if (trigRes?.ok) {
+            setJobStatus('InProgress');
+          }
+          setStatusMessage(
+            `✓ Added ${incCount} of ${totalCount} workspaces to recurring schedule (every ${next.intervalMinutes}m) and triggered compute notebook run now.`,
+          );
+        } else {
+          setStatusMessage(
+            nextScheduleEnabled
+              ? `✓ Added ${incCount} of ${totalCount} workspaces to recurring schedule (every ${next.intervalMinutes}m). Next scheduled notebook run will scan all ${incCount} workspaces.`
+              : `✓ Saved ${incCount} of ${totalCount} monitored workspaces to nb_governly_compute_publish.`,
+          );
+        }
+        invalidateQueryCache();
+        refreshData();
+      } catch {
+        saveSyncedExcludedIds(next.excludedWorkspaceIds);
+        setStatusMessage(
+          `✓ Saved ${incCount} of ${totalCount} monitored workspaces for recurring notebook runs.`,
+        );
+      } finally {
+        setSavingWorkspaces(false);
+      }
+    },
+    [allWorkspaces, persistConfigToSql, refreshData, resolveWriteWorkspaceId],
+  );
+
+  const currentExSorted = [...config.excludedWorkspaceIds].sort().join(',');
+  const syncedExSorted = [...syncedExcludedIds].sort().join(',');
+  const hasUnsavedWorkspaces = currentExSorted !== syncedExSorted;
+
   return {
     config,
     allWorkspaces,
     savingSchedule,
+    savingWorkspaces,
+    hasUnsavedWorkspaces,
     triggering,
     jobStatus,
     statusMessage,
     toggleWorkspaceIncluded,
     setAllWorkspacesIncluded,
+    applyWorkspacesToSchedule,
     updateSchedule,
     saveNotebookParams,
     triggerComputeNow,
   };
+}
+
+export function useLiveRuntimeJobs(): LiveRuntimeJobItem[] {
+  const { resolveWriteWorkspaceId, refreshTick } = useWorkspace();
+  const [jobs, setJobs] = useState<LiveRuntimeJobItem[]>(loadCachedRuntimeJobs);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onUpdate = () => setJobs(loadCachedRuntimeJobs());
+    window.addEventListener(LIVE_RUNTIME_JOBS_EVENT, onUpdate);
+    window.addEventListener('storage', onUpdate);
+    return () => {
+      window.removeEventListener(LIVE_RUNTIME_JOBS_EVENT, onUpdate);
+      window.removeEventListener('storage', onUpdate);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
+        const res = await client.functions.manageComputeNotebook.invoke({
+          hostWorkspaceId: hostWsId,
+          action: 'jobs',
+          scheduleEnabled: false,
+          intervalMinutes: DEFAULT_COMPUTE_CADENCE_MINUTES,
+        });
+        if (cancelled || !res?.ok) return;
+        const rawJson = (res as unknown as { jobsJson?: string }).jobsJson;
+        if (rawJson) {
+          const parsed = JSON.parse(rawJson) as LiveRuntimeJobItem[];
+          if (Array.isArray(parsed)) {
+            saveCachedRuntimeJobs(parsed);
+          }
+        }
+      } catch {
+        // Optional in unit tests / offline mode
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolveWriteWorkspaceId, refreshTick]);
+
+  return jobs;
 }

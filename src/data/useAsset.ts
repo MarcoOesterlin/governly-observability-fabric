@@ -8,8 +8,9 @@ import type {
 } from "../fixtures/types";
 import { client } from "./client";
 import { useCachedQuery } from "./queryCache";
-import { useAssets, type AssetItem } from "./useAssets";
+import { useAssets, useRuntimeAssets, type AssetItem } from "./useAssets";
 import { parseLagLabelToMinutes } from "./useFreshnessSla";
+import { isQualityRuleDeleted, isSystemQualityRuleRow } from "./useQualityRules";
 
 const EMPTY_LIVE_ASSET: AssetItem = {
   id: "no-asset",
@@ -30,10 +31,15 @@ const EMPTY_LIVE_ASSET: AssetItem = {
 };
 
 export function useAsset(assetKey?: string): AssetItem {
-  const { rows } = useAssets();
+  const { rows: dataAssets } = useAssets({ includeRuntime: true });
+  const { rows: runtimeAssets } = useRuntimeAssets();
+  const matched =
+    runtimeAssets.find((a) => a.id === assetKey || a.name === assetKey) ??
+    dataAssets.find((a) => a.id === assetKey || a.name === assetKey) ??
+    dataAssets[0] ??
+    runtimeAssets[0];
   return (
-    rows.find((a) => a.id === assetKey || a.name === assetKey) ??
-    rows[0] ?? {
+    matched ?? {
       ...EMPTY_LIVE_ASSET,
       id: assetKey ?? "no-asset",
       name: assetKey ?? "No monitored asset",
@@ -58,12 +64,12 @@ export function useAssetFreshness(assetKey?: string): {
 } {
   const { workspaceId, refreshTick } = useWorkspace();
   const asset = useAsset(assetKey);
+  const { liveJobs } = useRuntimeAssets();
   const slaMinutes = asset.slaMinutes ?? 60;
 
-  return useCachedQuery(
+  const sqlFreshness = useCachedQuery(
     workspaceId && assetKey ? `asset-freshness:${workspaceId}:${assetKey}:${slaMinutes}` : null,
     async () => {
-      const isAll = workspaceId === ALL_WORKSPACES_ID;
       const runsQuery = client.data.PubRefreshRun.select([
         "run_id",
         "completed_at",
@@ -74,19 +80,10 @@ export function useAssetFreshness(assetKey?: string): {
         "result_label",
       ]);
       const lagsQuery = client.data.PubAssetLagPoint.select(["ts", "lag_minutes"]);
+      // Query across all workspaces for asset_key so runtime notebooks/pipelines in excluded or host workspaces resolve runs
       const [rows, lags] = await Promise.all([
-        (isAll
-          ? runsQuery.where({ asset_key: { eq: assetKey! } }).execute()
-          : runsQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey! } })
-              .execute()
-        ).catch(() => []),
-        (isAll
-          ? lagsQuery.where({ asset_key: { eq: assetKey! } }).execute()
-          : lagsQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey! } })
-              .execute()
-        ).catch(() => []),
+        runsQuery.where({ asset_key: { eq: assetKey! } }).execute().catch(() => []),
+        lagsQuery.where({ asset_key: { eq: assetKey! } }).execute().catch(() => []),
       ]);
       const mappedRuns: RefreshRunFixture[] = Array.isArray(rows)
         ? rows.map((r) => {
@@ -138,6 +135,34 @@ export function useAssetFreshness(assetKey?: string): {
     EMPTY_FRESHNESS,
     refreshTick
   );
+
+  const liveJob = liveJobs.find((j) => j.asset_key === assetKey || j.name === assetKey);
+  if (liveJob && liveJob.runs.length > 0) {
+    const derivedLabels = liveJob.runs
+      .slice(0, 6)
+      .reverse()
+      .map((r, idx, arr) => (idx === arr.length - 1 ? "latest" : r.time));
+    return {
+      runs: liveJob.runs.map((r) => {
+        const isHardFail = r.label.toLowerCase().includes("fail");
+        const parsedRunLag = parseLagLabelToMinutes(r.lag);
+        const isBreach =
+          isHardFail ||
+          (parsedRunLag !== null ? parsedRunLag > slaMinutes : r.result === "breach");
+        return {
+          time: r.time,
+          lag: r.lag,
+          rows: r.rows,
+          result: isBreach ? "breach" : "ok",
+          label: isHardFail ? "Run Failed" : isBreach ? "SLA Breach" : "On time",
+        };
+      }),
+      lagPoints: liveJob.lag_points.length > 0 ? liveJob.lag_points : sqlFreshness.lagPoints,
+      lagLabels: derivedLabels.length > 0 ? derivedLabels : sqlFreshness.lagLabels,
+    };
+  }
+
+  return sqlFreshness;
 }
 
 const EMPTY_QUALITY_RULES: QualityRuleFixture[] = [];
@@ -186,6 +211,7 @@ export function useAssetQuality(assetKey?: string): QualityRuleFixture[] {
 
       if (Array.isArray(rows)) {
         for (const r of rows) {
+          if (isSystemQualityRuleRow(r) || isQualityRuleDeleted(undefined, r.rule_name)) continue;
           merged.set(r.rule_name, {
             name: r.rule_name,
             detail: r.definition,
@@ -198,7 +224,13 @@ export function useAssetQuality(assetKey?: string): QualityRuleFixture[] {
       if (Array.isArray(customRows)) {
         const shortKey = assetKey!.split(".").pop() ?? assetKey!;
         for (const cr of customRows) {
-          if (cr.is_active === false || cr.rule_type === "freshness_sla") continue;
+          if (
+            cr.is_active === false ||
+            isSystemQualityRuleRow(cr) ||
+            isQualityRuleDeleted(cr.id, cr.rule_name)
+          ) {
+            continue;
+          }
           const crAsset = String(cr.asset_key ?? "");
           if (crAsset !== assetKey && crAsset !== shortKey && crAsset !== "*") continue;
           if (!merged.has(cr.rule_name)) {
@@ -320,11 +352,11 @@ const EMPTY_JOB_DIAGNOSTICS: JobFailureDiagnostic[] = [];
 
 export function useJobFailureDiagnostics(assetKey?: string): JobFailureDiagnostic[] {
   const { workspaceId, refreshTick } = useWorkspace();
+  const { liveJobs } = useRuntimeAssets();
 
-  return useCachedQuery(
+  const sqlDiagnostics = useCachedQuery(
     workspaceId ? `job-failure-diagnostics:${workspaceId}:${assetKey ?? "*"}` : null,
     async () => {
-      const isAllWs = workspaceId === ALL_WORKSPACES_ID;
       const pubFailedRowRepo = (client.data as Record<string, any>).PubQualityFailedRow;
       if (!pubFailedRowRepo) return [];
       const baseQuery = pubFailedRowRepo.select([
@@ -339,14 +371,8 @@ export function useJobFailureDiagnostics(assetKey?: string): JobFailureDiagnosti
         "detected_at",
       ]);
       const rows = !assetKey
-        ? isAllWs
-          ? await baseQuery.execute()
-          : await baseQuery.where({ workspace_id: { eq: workspaceId! } }).execute()
-        : isAllWs
-          ? await baseQuery.where({ asset_key: { eq: assetKey } }).execute()
-          : await baseQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey } })
-              .execute();
+        ? await baseQuery.execute()
+        : await baseQuery.where({ asset_key: { eq: assetKey } }).execute();
       if (!Array.isArray(rows) || rows.length === 0) return [];
       return rows
         .filter((r: any) => String(r.rule_name ?? "").startsWith("Job Run:"))
@@ -365,6 +391,28 @@ export function useJobFailureDiagnostics(assetKey?: string): JobFailureDiagnosti
     EMPTY_JOB_DIAGNOSTICS,
     refreshTick
   );
+
+  const byKey = new Map<string, JobFailureDiagnostic>();
+  for (const d of sqlDiagnostics) {
+    byKey.set(d.assetKey, d);
+  }
+  for (const job of liveJobs) {
+    if (assetKey && job.asset_key !== assetKey && job.name !== assetKey) continue;
+    for (const diag of job.diagnostics ?? []) {
+      byKey.set(job.asset_key, {
+        id: diag.id || `live-job-${job.asset_key}`,
+        assetKey: job.asset_key,
+        assetType: job.asset_type,
+        runId: diag.runId || "latest",
+        statusLabel: diag.statusLabel,
+        errorCode: diag.errorCode || "JobExecutionFailed",
+        whyFailed: diag.whyFailed,
+        possibleSolution: diag.possibleSolution,
+        detectedAt: diag.detectedAt || "Latest run",
+      });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 const EMPTY_SCHEMA: { columns: SchemaColumnFixture[]; log: SchemaLogFixture[] } = {

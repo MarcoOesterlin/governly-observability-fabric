@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { css } from '../../lib/css';
 import { badge } from './primitives';
 import { useAssetSchema } from '../../data/useAsset';
-import { useQualityRules, type CustomQualityRule } from '../../data/useQualityRules';
+import {
+  DATA_QUALITY_DIMENSIONS,
+  useQualityRules,
+  type CustomQualityRule,
+} from '../../data/useQualityRules';
 import { validateQualityRule, type RuleType } from '../../lib/ruleValidator';
 
 const btnPrimary = css(
@@ -31,6 +35,7 @@ export function QualityRuleStudio({
   const { columns: schemaColumns } = useAssetSchema(assetKey);
   const {
     rules: customRules,
+    actionFeedback,
     createRule,
     updateRule,
     seedDefaultRules,
@@ -88,40 +93,6 @@ export function QualityRuleStudio({
       }),
     [ruleName, ruleType, expression, thresholdPct, assetKey, schemaColumns],
   );
-
-  const applyTemplate = (kind: 'not_null' | 'positive' | 'unique' | 'in_set' | 'rlike') => {
-    const firstCol = schemaColumns[0]?.col ?? 'id';
-    const numCol =
-      schemaColumns.find((c) => /INT|DEC|NUM|DOUBLE|FLOAT|LONG/i.test(c.type))?.col ?? firstCol;
-    const strCol = schemaColumns.find((c) => /STRING|VARCHAR|CHAR|TEXT/i.test(c.type))?.col ?? firstCol;
-
-    if (kind === 'not_null') {
-      setRuleType('not_null');
-      setRuleName(`${firstCol} not null`);
-      setExpression(`${firstCol} IS NOT NULL`);
-      setThresholdPct(100);
-    } else if (kind === 'positive') {
-      setRuleType('range');
-      setRuleName(`${numCol} non-negative`);
-      setExpression(`${numCol} >= 0 AND ${numCol} IS NOT NULL`);
-      setThresholdPct(99.5);
-    } else if (kind === 'unique') {
-      setRuleType('unique');
-      setRuleName(`${firstCol} unique key`);
-      setExpression(`${firstCol} IS NOT NULL`);
-      setThresholdPct(100);
-    } else if (kind === 'in_set') {
-      setRuleType('sql_predicate');
-      setRuleName(`${strCol} valid domain values`);
-      setExpression(`LENGTH(TRIM(${strCol})) > 0`);
-      setThresholdPct(99.0);
-    } else if (kind === 'rlike') {
-      setRuleType('sql_predicate');
-      setRuleName(`${strCol} pattern format`);
-      setExpression(`${strCol} RLIKE '^[A-Za-z0-9_-]+$'`);
-      setThresholdPct(95.0);
-    }
-  };
 
   const insertColumn = (colName: string) => {
     if (!ruleName.trim()) {
@@ -201,25 +172,31 @@ export function QualityRuleStudio({
             <span style={badge('var(--acc)', 'var(--accb)')}>{assetKey}</span>
           </div>
           <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;')}>
-            <span style={css('font-size:11.5px;color:var(--fgs);margin-right:4px;')}>Templates:</span>
-            {(
-              [
-                ['not_null', 'NOT NULL'],
-                ['positive', '>= 0 Range'],
-                ['unique', 'Unique Key'],
-                ['in_set', 'Non-empty Text'],
-                ['rlike', 'Regex RLIKE'],
-              ] as const
-            ).map(([k, label]) => (
+            <span style={css('font-size:11.5px;color:var(--fgs);margin-right:4px;')}>
+              DQ Dimension Templates:
+            </span>
+            {DATA_QUALITY_DIMENSIONS.map((dim) => (
               <button
-                key={k}
+                key={dim.dimension}
                 type="button"
-                onClick={() => applyTemplate(k)}
+                title={dim.description}
+                onClick={() => {
+                  const built = dim.buildRule(
+                    schemaColumns.length > 0
+                      ? schemaColumns
+                      : [{ col: 'id', type: 'STRING', flag: 'PK', note: '' }],
+                  );
+                  setRuleType(dim.rule_type);
+                  setRuleName(built.rule_name);
+                  setExpression(built.expression);
+                  setThresholdPct(dim.threshold_pct);
+                  setSeverity(dim.severity);
+                }}
                 style={css(
                   'padding:4px 9px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--bg2,#f4f4f6);font-size:11.5px;font-weight:500;color:var(--fgm);cursor:pointer;',
                 )}
               >
-                {label}
+                {dim.label}
               </button>
             ))}
           </div>
@@ -376,16 +353,16 @@ export function QualityRuleStudio({
                   Cancel Edit
                 </button>
               )}
-              {customRules.length === 0 && (
-                <button
-                  type="button"
-                  onClick={() => void seedDefaultRules(assetKey, schemaColumns[0]?.col ?? 'id')}
-                  style={btnSecondary}
-                >
-                  <i className="ph ph-magic-wand" aria-hidden="true" />
-                  Add Editable Default Rules
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() =>
+                  void seedDefaultRules(assetKey, schemaColumns[0]?.col ?? 'id', schemaColumns)
+                }
+                style={btnSecondary}
+              >
+                <i className="ph ph-magic-wand" aria-hidden="true" />
+                Load {DATA_QUALITY_DIMENSIONS.length} DQ Dimension Rules
+              </button>
               <button
                 type="button"
                 onClick={() => void handleCopyNotebookCode()}
@@ -396,13 +373,14 @@ export function QualityRuleStudio({
               </button>
             </div>
 
-            {statusBanner && (
+            {(statusBanner || actionFeedback) && (
               <div
+                role="status"
                 style={css(
-                  'padding:8px 12px;border-radius:8px;background:var(--okb);color:var(--ok);font-size:12px;font-weight:500;',
+                  'padding:8px 12px;border-radius:8px;background:var(--okb);color:var(--ok);font-size:12px;font-weight:600;',
                 )}
               >
-                {statusBanner}
+                {statusBanner || actionFeedback}
               </div>
             )}
           </div>
@@ -548,7 +526,7 @@ export function QualityRuleStudio({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void deleteRule(cr.id)}
+                      onClick={() => void deleteRule(cr.id, cr.rule_name)}
                       style={css(
                         'padding:3px 8px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);font-size:11.5px;color:var(--crit);cursor:pointer;',
                       )}
