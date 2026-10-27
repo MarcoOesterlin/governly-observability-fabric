@@ -6,14 +6,14 @@ import { qColor, statusColor } from './primitives';
 import { isRuntimeOnlyAssetType } from '../../data/useAssets';
 import type { AssetFixture } from '../../fixtures/types';
 
-type AssetCategoryFilter = 'all' | 'tables' | 'semantic-models' | 'data-products';
+type AssetCategoryFilter = 'all' | 'tables' | 'semantic-models';
 type AssetStatusFilter = 'all' | 'healthy' | 'attention' | 'has-dq';
 
 export function AssetsCard({
   assets,
   totalCount,
   title = 'Monitored assets',
-  subtitle = 'Data assets, Lakehouse tables, and Semantic models',
+  subtitle = 'Lakehouse tables and Semantic models',
   showFilters = true,
 }: {
   assets: AssetFixture[];
@@ -27,29 +27,21 @@ export function AssetsCard({
   const [statusFilter, setStatusFilter] = useState<AssetStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Overview & Monitored Assets strictly focus on Data Assets & Semantic Models (runtime jobs live in Pipelines & Freshness)
-  const dataAssetsOnly = assets.filter(
-    (a) => !isRuntimeOnlyAssetType(a.type) && a.type.toLowerCase() !== 'dataagent',
-  );
+  // Overview & Monitored Assets strictly focus on Lakehouse Tables & Semantic Models (runtime jobs live in Pipelines & Freshness)
+  const dataAssetsOnly = assets.filter((a) => {
+    const t = a.type.toLowerCase();
+    return !isRuntimeOnlyAssetType(a.type) && t !== 'dataagent' && t !== 'lakehouse';
+  });
 
   const countByCategory = {
     all: dataAssetsOnly.length,
     tables: dataAssetsOnly.filter((a) => a.type === 'Lakehouse table').length,
     'semantic-models': dataAssetsOnly.filter((a) => a.type === 'Semantic model').length,
-    'data-products': dataAssetsOnly.filter(
-      (a) => a.type !== 'Lakehouse table' && a.type !== 'Semantic model',
-    ).length,
   };
 
   const filteredAssets = dataAssetsOnly.filter((a) => {
     if (categoryFilter === 'tables' && a.type !== 'Lakehouse table') return false;
     if (categoryFilter === 'semantic-models' && a.type !== 'Semantic model') return false;
-    if (
-      categoryFilter === 'data-products' &&
-      (a.type === 'Lakehouse table' || a.type === 'Semantic model')
-    ) {
-      return false;
-    }
     if (statusFilter === 'healthy' && a.status !== 'healthy') return false;
     if (statusFilter === 'attention' && a.status === 'healthy' && !a.late) return false;
     if (statusFilter === 'has-dq' && a.quality < 0) return false;
@@ -140,15 +132,6 @@ export function AssetsCard({
             >
               Semantic Models ({countByCategory['semantic-models']})
             </button>
-            {countByCategory['data-products'] > 0 && (
-              <button
-                type="button"
-                onClick={() => setCategoryFilter('data-products')}
-                style={pillStyle(categoryFilter === 'data-products')}
-              >
-                Data Products / Lakehouses ({countByCategory['data-products']})
-              </button>
-            )}
           </div>
           <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;')}>
             <button

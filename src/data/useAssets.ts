@@ -175,6 +175,7 @@ export function useAssets(filter: AssetFilter = {}): {
         const aType = String(r.asset_type ?? "").trim().toLowerCase();
         const aKeyLower = String(r.asset_key ?? r.name ?? "").trim().toLowerCase();
         if (aType === "dataagent" || aKeyLower.startsWith("dataagent.")) return false;
+        if (aType === "lakehouse" || aKeyLower.startsWith("lakehouse.")) return false;
         return true;
       });
       if (validAssets.length === 0) return [];
