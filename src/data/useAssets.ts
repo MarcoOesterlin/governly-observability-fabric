@@ -156,8 +156,8 @@ export function useAssets(filter: AssetFilter = {}): {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
       const [res, qResults, allUserRules] = await Promise.all([
         fetchSharedPubAssets(workspaceId!, refreshTick),
-        fetchSharedPubQualityResults(workspaceId!, refreshTick),
-        fetchSharedQualityRules(refreshTick),
+        fetchSharedPubQualityResults(workspaceId!, refreshTick).catch(() => []),
+        fetchSharedQualityRules(refreshTick).catch(() => []),
       ]);
       if (!Array.isArray(res) || res.length === 0) return [];
       const userRules = isAll

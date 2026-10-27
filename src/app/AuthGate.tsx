@@ -1,24 +1,22 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { client } from "../data/client";
+import { invalidateQueryCache } from "../data/queryCache";
 import { SignInScreen } from "./SignInScreen";
 import { AppSpinner } from "../components/ui/AppSpinner";
 
 type Session = { user?: { id: string; email?: string; name?: string } } | null;
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session>(() => {
-    try {
-      return (client.auth.getSession() as Session) ?? null;
-    } catch {
-      return null;
-    }
-  });
-  const [ready, setReady] = useState<boolean>(() => Boolean(session?.user));
+  const [session, setSession] = useState<Session>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = client.auth.onSessionChange((s: unknown) => {
-      if (!cancelled) setSession(s as Session);
+      if (!cancelled) {
+        invalidateQueryCache();
+        setSession(s as Session);
+      }
     });
     void (async () => {
       try {
@@ -28,8 +26,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
         await auth.initEmbeddedAuth?.();
       } finally {
         if (!cancelled) {
-          const current = client.auth.getSession() as Session;
-          setSession((prev) => current ?? prev);
+          invalidateQueryCache();
+          setSession((client.auth.getSession() as Session) ?? null);
           setReady(true);
         }
       }

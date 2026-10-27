@@ -63,10 +63,9 @@ export function fetchSharedPubQualityResults(workspaceId: string, refreshTick = 
         "observed_label",
         "result",
       ]);
-      const rows = await (isAll
-        ? baseQRes.first(500).execute()
-        : baseQRes.where({ workspace_id: { eq: workspaceId } }).first(500).execute()
-      ).catch(() => []);
+      const rows = isAll
+        ? await baseQRes.first(500).execute()
+        : await baseQRes.where({ workspace_id: { eq: workspaceId } }).first(500).execute();
       return Array.isArray(rows) ? rows : [];
     },
     refreshTick
@@ -92,8 +91,7 @@ export function fetchSharedQualityRules(refreshTick = 0) {
         "updated_at",
       ])
         .first(300)
-        .execute()
-        .catch(() => []);
+        .execute();
       return Array.isArray(rows) ? rows : [];
     },
     refreshTick
