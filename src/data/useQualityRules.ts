@@ -425,35 +425,69 @@ export function useQualityRules(assetKey?: string) {
       notifyOptimisticRules();
       showFeedback(`✓ Deleted rule "${targetName || id}"`);
 
-      // Persist deletion in background without blocking UI
+      // Persist deletion in background across all SQL tables (QualityRules, PubQualityResults, PubQualityFailedRows)
       const realId = target?.id ?? id;
-      if (realId && !realId.startsWith('optimistic-') && !realId.startsWith('pub-')) {
-        void client.data.QualityRule.delete({ id: realId }).catch(() => undefined);
-      }
-      if (targetName) {
-        void (async () => {
-          try {
-            const pubRepo = (client.data as Record<string, any>).PubQualityResult;
-            if (pubRepo) {
-              const rows = await pubRepo
-                .select(['id', 'rule_name'])
-                .where({ rule_name: { eq: targetName } })
-                .execute();
-              if (Array.isArray(rows)) {
-                for (const row of rows) {
-                  if (row?.id) {
-                    await pubRepo.delete({ id: row.id }).catch(() => undefined);
-                  }
+      const targetAssetKey = target?.asset_key ?? assetKey;
+      void (async () => {
+        try {
+          if (realId && !realId.startsWith('optimistic-') && !realId.startsWith('pub-')) {
+            await client.data.QualityRule.delete({ id: realId }).catch(() => undefined);
+          }
+          if (targetName) {
+            // Also clean up any matching QualityRule rows by rule_name (e.g. duplicates or when triggered from published table)
+            const matchingRules = await client.data.QualityRule.select(['id', 'rule_name', 'asset_key'])
+              .where({ rule_name: { eq: targetName } })
+              .execute()
+              .catch(() => []);
+            if (Array.isArray(matchingRules)) {
+              for (const row of matchingRules) {
+                if (
+                  row?.id &&
+                  (!targetAssetKey || !row.asset_key || row.asset_key === targetAssetKey)
+                ) {
+                  await client.data.QualityRule.delete({ id: row.id }).catch(() => undefined);
                 }
               }
             }
-          } catch {
-            // optional cleanup
+
+            // Clean up published check results in dbo.PubQualityResults
+            const pubRows = await client.data.PubQualityResult.select(['id', 'rule_name', 'asset_key'])
+              .where({ rule_name: { eq: targetName } })
+              .execute()
+              .catch(() => []);
+            if (Array.isArray(pubRows)) {
+              for (const row of pubRows) {
+                if (
+                  row?.id &&
+                  (!targetAssetKey || !row.asset_key || row.asset_key === targetAssetKey)
+                ) {
+                  await client.data.PubQualityResult.delete({ id: row.id }).catch(() => undefined);
+                }
+              }
+            }
+
+            // Clean up published failed row samples in dbo.PubQualityFailedRows
+            const failedRows = await client.data.PubQualityFailedRow.select(['id', 'rule_name', 'asset_key'])
+              .where({ rule_name: { eq: targetName } })
+              .execute()
+              .catch(() => []);
+            if (Array.isArray(failedRows)) {
+              for (const row of failedRows) {
+                if (
+                  row?.id &&
+                  (!targetAssetKey || !row.asset_key || row.asset_key === targetAssetKey)
+                ) {
+                  await client.data.PubQualityFailedRow.delete({ id: row.id }).catch(() => undefined);
+                }
+              }
+            }
           }
-        })();
-      }
+        } catch {
+          // background SQL cleanup
+        }
+      })();
     },
-    [visibleRules, showFeedback],
+    [visibleRules, showFeedback, assetKey],
   );
 
   const updateRule = useCallback(

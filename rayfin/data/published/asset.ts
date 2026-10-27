@@ -54,7 +54,7 @@ export class PubRefreshRun {
   @date() published_at!: Date;
 }
 
-@authenticated('read')
+@authenticated('*')
 @entity()
 export class PubQualityResult {
   @uuid() id!: string;
@@ -68,7 +68,7 @@ export class PubQualityResult {
   @date() published_at!: Date;
 }
 
-@authenticated('read')
+@authenticated('*')
 @entity()
 export class PubQualityFailedRow {
   @uuid() id!: string;
