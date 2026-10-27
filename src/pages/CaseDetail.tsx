@@ -5,6 +5,7 @@ import { Box } from '../components/governly/Box';
 import { badge, sevPair } from '../components/governly/primitives';
 import { CommentThread } from '../components/governly/CommentThread';
 import { client } from '../data/client';
+import { updateStewardCaseStatus } from '../data/useCaseActions';
 import { useCurrentSteward } from '../data/useCurrentSteward';
 import { useCases, useIncidents } from '../data/useIncidents';
 import type { CaseFixture, CommentFixture } from '../fixtures/types';
@@ -75,23 +76,27 @@ export function CaseDetail() {
   }, [c.key]);
 
   const handleStatusChange = (nextStatus: CaseFixture['status']) => {
+    if (effectiveStatus === nextStatus) return;
     setLocalStatus(nextStatus);
-    void (async () => {
-      try {
-        const existing = await client.data.StewardCase.select(['id'])
-          .where({ case_key: { eq: c.key } })
-          .execute();
-        if (Array.isArray(existing) && existing[0]?.id) {
-          await client.data.StewardCase.update(
-            { id: existing[0].id },
-            { status: nextStatus, updated_at: new Date() }
-          );
-          refreshData();
-        }
-      } catch {
-        // ignore offline errors
-      }
-    })();
+    const who = steward.entra?.display_name ?? 'Workspace Steward';
+    const initials = steward.initials ?? 'WS';
+    const timeLbl = new Date().toISOString().slice(11, 16);
+    const statusNote = `Moved case status to ${nextStatus}.`;
+    setCaseComments((prev) => [
+      ...prev,
+      { who, initials, time: timeLbl, text: statusNote, system: true },
+    ]);
+    void updateStewardCaseStatus(c.key, nextStatus, refreshData);
+    void client.data.IncidentComment.create({
+      workspace_id: resolveWriteWorkspaceId(),
+      incident_key: c.key,
+      body: statusNote,
+      author_name: who,
+      author_user_id: steward.entra?.object_id ?? 'steward',
+      author_object_id:
+        steward.entra?.object_id ?? '00000000-0000-0000-0000-000000000001',
+      created_at: new Date(),
+    }).catch(() => undefined);
   };
 
   return (

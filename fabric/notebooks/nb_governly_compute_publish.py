@@ -1981,6 +1981,32 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
         for logical_name, rows in payloads:
             counts_by_table[logical_name] = replace_table_rows_jdbc(jdbc_conn, logical_name, rows, commit=False)
 
+        # Preserve user-modified case statuses in dbo.[StewardCases] before replacing rows
+        existing_status_by_id: dict[str, str] = {}
+        existing_status_by_key: dict[str, str] = {}
+        try:
+            stmt_sc = jdbc_conn.createStatement()
+            rs_sc = stmt_sc.executeQuery("SELECT [id], [case_key], [status] FROM dbo.[StewardCases]")
+            while rs_sc.next():
+                cid_str = str(rs_sc.getString(1) or "").lower()
+                ckey_str = str(rs_sc.getString(2) or "")
+                cstat_str = str(rs_sc.getString(3) or "")
+                if cid_str and cstat_str:
+                    existing_status_by_id[cid_str] = cstat_str
+                if ckey_str and cstat_str:
+                    existing_status_by_key[ckey_str] = cstat_str
+            rs_sc.close()
+            stmt_sc.close()
+        except Exception:
+            pass
+        for sc_row in steward_cases:
+            preserved = (
+                existing_status_by_id.get(str(sc_row.get("id") or "").lower())
+                or existing_status_by_key.get(str(sc_row.get("case_key") or ""))
+            )
+            if preserved and preserved.lower() != "open":
+                sc_row["status"] = preserved
+
         # ReplaceCaseIncidentLinks before StewardCases due to FK constraint
         counts_by_table["CaseIncidentLink"] = replace_table_rows_jdbc(jdbc_conn, "CaseIncidentLink", [], commit=False)
         counts_by_table["StewardCase"] = replace_table_rows_jdbc(jdbc_conn, "StewardCase", steward_cases, commit=False)

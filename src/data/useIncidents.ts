@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ALL_WORKSPACES_ID, useWorkspace } from "../app/WorkspaceProvider";
 import type {
   CaseFixture,
@@ -10,6 +11,7 @@ import { client } from "./client";
 import { toIncidentFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { IncidentFilter } from "./queryKeys";
+import { CASE_STATUS_EVENT, loadLocalCaseStatuses } from "./useCaseActions";
 
 function buildLiveTimeline(status: IncidentFixture["status"]): TimelineFixture[] {
   const base: TimelineFixture[] = [
@@ -57,7 +59,11 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
         "status",
         "assignee_name",
       ]);
-      const [pubRows, overlays] = await Promise.all([
+      const baseAssetOwners = client.data.PubAsset.select([
+        "asset_key",
+        "owner_name",
+      ]);
+      const [pubRows, overlays, assetOwnerRows, entraUsers] = await Promise.all([
         isAll
           ? basePub.execute()
           : basePub.where({ workspace_id: { eq: workspaceId! } }).execute(),
@@ -65,21 +71,59 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
           ? baseOverlay.execute()
           : baseOverlay.where({ workspace_id: { eq: workspaceId! } }).execute()
         ).catch(() => []),
+        (isAll
+          ? baseAssetOwners.execute()
+          : baseAssetOwners.where({ workspace_id: { eq: workspaceId! } }).execute()
+        ).catch(() => []),
+        client.data.PubEntraUser.select(["display_name", "is_synthetic"])
+          .first(50)
+          .execute()
+          .catch(() => []),
       ]);
       if (!Array.isArray(pubRows) || pubRows.length === 0) return [];
       const stateByKey = new Map(
         (Array.isArray(overlays) ? overlays : []).map((o) => [o.incident_key, o])
       );
+      const ownerByAsset = new Map<string, string>();
+      if (Array.isArray(assetOwnerRows)) {
+        for (const a of assetOwnerRows) {
+          const oname = String(a.owner_name ?? "").trim();
+          if (a.asset_key && oname && oname !== "Workspace Steward") {
+            ownerByAsset.set(String(a.asset_key), oname);
+          }
+        }
+      }
+      const fallbackEntraName =
+        (Array.isArray(entraUsers)
+          ? entraUsers.find(
+              (u) =>
+                !u.is_synthetic &&
+                u.display_name &&
+                u.display_name !== "Workspace Steward"
+            )?.display_name ??
+            entraUsers.find(
+              (u) => u.display_name && u.display_name !== "Workspace Steward"
+            )?.display_name
+          : undefined) || undefined;
+
       return pubRows.map((r) => {
         const st = stateByKey.get(r.incident_key);
-        const assigneeName = st?.assignee_name || "Workspace Steward";
+        const rawOverlayAssignee =
+          st?.assignee_name && st.assignee_name !== "Workspace Steward"
+            ? st.assignee_name
+            : undefined;
+        const assigneeName =
+          rawOverlayAssignee ||
+          ownerByAsset.get(String(r.asset_key)) ||
+          fallbackEntraName ||
+          "Unassigned";
         const initials =
           assigneeName
             .split(/\s+/)
             .map((p: string) => p[0] ?? "")
             .join("")
             .slice(0, 2)
-            .toUpperCase() || "WS";
+            .toUpperCase() || "ST";
         return toIncidentFixture(
           {
             ...r,
@@ -198,8 +242,22 @@ export function useIncidentDetailData(incidentId?: string): {
 
 export function useCases(): CaseFixture[] {
   const { workspaceId, refreshTick } = useWorkspace();
+  const [localStatusMap, setLocalStatusMap] = useState<Record<string, CaseFixture["status"]>>(
+    () => loadLocalCaseStatuses()
+  );
 
-  return useCachedQuery<CaseFixture[]>(
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onSync = () => setLocalStatusMap(loadLocalCaseStatuses());
+    window.addEventListener(CASE_STATUS_EVENT, onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener(CASE_STATUS_EVENT, onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, []);
+
+  const rows = useCachedQuery<CaseFixture[]>(
     workspaceId ? `cases:${workspaceId}` : null,
     async () => {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
@@ -213,15 +271,31 @@ export function useCases(): CaseFixture[] {
         "owner_name",
         "due_date",
       ]);
-      const [rows, links] = await Promise.all([
+      const [rows, links, entraUsers] = await Promise.all([
         isAll
           ? baseCases.execute()
           : baseCases.where({ workspace_id: { eq: workspaceId! } }).execute(),
         client.data.CaseIncidentLink.select(["case.id", "incident_key"])
           .execute()
           .catch(() => []),
+        client.data.PubEntraUser.select(["display_name", "is_synthetic"])
+          .first(50)
+          .execute()
+          .catch(() => []),
       ]);
       if (!Array.isArray(rows) || rows.length === 0) return [];
+      const fallbackEntraName =
+        (Array.isArray(entraUsers)
+          ? entraUsers.find(
+              (u) =>
+                !u.is_synthetic &&
+                u.display_name &&
+                u.display_name !== "Workspace Steward"
+            )?.display_name ??
+            entraUsers.find(
+              (u) => u.display_name && u.display_name !== "Workspace Steward"
+            )?.display_name
+          : undefined) || "Unassigned";
       const linksByCaseId = new Map<string, string[]>();
       if (Array.isArray(links)) {
         for (const l of links) {
@@ -239,22 +313,28 @@ export function useCases(): CaseFixture[] {
             ? "Done"
             : rawStatus.toLowerCase() === "in progress"
               ? "In progress"
-              : "Open";
+              : rawStatus.toLowerCase() === "blocked"
+                ? "Blocked"
+                : "Open";
         const dueInDays = r.due_date
           ? Math.max(
               0,
               Math.ceil((new Date(String(r.due_date)).getTime() - Date.now()) / 86_400_000)
             )
           : 2;
+        const ownerName =
+          r.owner_name && r.owner_name !== "Workspace Steward"
+            ? r.owner_name
+            : fallbackEntraName;
         return {
           key: r.case_key,
           title: r.title,
           domain: r.domain_key,
           priority: (r.priority as CaseFixture["priority"]) ?? "Medium",
           status: mappedStatus,
-          owner: r.owner_name,
+          owner: ownerName,
           ownerInitials:
-            r.owner_name
+            ownerName
               .split(/\s+/)
               .map((p: string) => p[0] ?? "")
               .join("")
@@ -267,5 +347,9 @@ export function useCases(): CaseFixture[] {
     },
     EMPTY_CASES,
     refreshTick
+  );
+
+  return rows.map((c) =>
+    localStatusMap[c.key] ? { ...c, status: localStatusMap[c.key] } : c
   );
 }

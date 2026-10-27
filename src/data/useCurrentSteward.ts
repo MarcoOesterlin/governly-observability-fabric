@@ -133,10 +133,11 @@ function resolveSessionIdentity(): {
     const oid = session?.user?.oid || claims.oid || session?.user?.id || claims.sub;
     const role = session?.user?.role || claims.role;
     if (email || rawName || oid) {
+      const resolvedName = formatDisplayNameFromIdentity(rawName, email);
       return {
         oid,
         email,
-        displayName: formatDisplayNameFromIdentity(rawName, email),
+        displayName: resolvedName !== "Workspace Steward" ? resolvedName : undefined,
         role,
       };
     }
@@ -148,7 +149,7 @@ function resolveSessionIdentity(): {
 
 function buildInitialSteward(): CurrentStewardState {
   const ident = resolveSessionIdentity();
-  if (ident.email || ident.displayName || ident.oid) {
+  if (ident.email || ident.displayName) {
     const displayName = ident.displayName ?? formatDisplayNameFromIdentity(undefined, ident.email);
     const upn = ident.email ?? "steward@fabric.local";
     return {
@@ -224,7 +225,7 @@ export function useCurrentSteward(): CurrentStewardState {
               })
             : candidateRows[0];
 
-        if (!matched && !ident.oid && !ident.email && candidateRows.length > 0) {
+        if (!matched && (!ident.displayName || ident.displayName === "Workspace Steward") && candidateRows.length > 0) {
           matched = candidateRows[0];
         }
 

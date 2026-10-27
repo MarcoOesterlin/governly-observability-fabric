@@ -6,6 +6,7 @@ import { badge, pill, sevPair, statusPair } from '../components/governly/primiti
 import { Timeline } from '../components/governly/Timeline';
 import { CommentThread } from '../components/governly/CommentThread';
 import { client } from '../data/client';
+import { invalidateQueryCache } from '../data/queryCache';
 import { useCurrentSteward } from '../data/useCurrentSteward';
 import { useIncidentDetailData } from '../data/useIncidents';
 import type {
@@ -110,7 +111,12 @@ export function IncidentDetail({
   const [actionToast, setActionToast] = useState<string | null>(null);
 
   const incStatus = propIncident ? (localStatus ?? propIncident.status) : (localStatus ?? baseInc.status);
-  const effectiveAssignee = localAssignee ?? baseInc.assignee ?? steward.entra?.display_name ?? 'Workspace Steward';
+  const cleanBaseAssignee =
+    baseInc.assignee && baseInc.assignee !== 'Workspace Steward' && baseInc.assignee !== 'Unassigned'
+      ? baseInc.assignee
+      : undefined;
+  const effectiveAssignee =
+    localAssignee ?? cleanBaseAssignee ?? steward.entra?.display_name ?? baseInc.assignee ?? 'Unassigned';
   const effectiveInitials =
     effectiveAssignee
       .split(/\s+/)
@@ -182,6 +188,7 @@ export function IncidentDetail({
           created_at: new Date(),
         });
       }
+      invalidateQueryCache('incidents:');
       refreshData();
     } catch {
       // ignore offline/test environment errors
