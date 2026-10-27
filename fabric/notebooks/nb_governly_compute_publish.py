@@ -5,8 +5,8 @@ TENANT_ID = ""
 CLIENT_ID = ""
 KEY_VAULT_URI = ""
 SECRET_NAME = "governly-graph-sync"
-APP_SQL_SERVER = "s3lrabakekdenjl5i5zqwf73ve-gey53tgqvnkeppzdpyigskrv4m.database.fabric.microsoft.com,1433"
-APP_SQL_DATABASE = "governly-dd7d75e2-9669-420b-90ff-7bf423106525"
+APP_SQL_SERVER = "s3lrabakekdenjl5i5zqwf73ve-hs3swbxxoaqu3bgeofnj3la5xi.database.fabric.microsoft.com,1433"
+APP_SQL_DATABASE = "governly-730f1186-45e9-4ad0-862c-ad1d3e9b0204"
 
 # %%
 from datetime import datetime, timedelta, timezone
@@ -673,6 +673,62 @@ def read_existing_pub_columns(jdbc_conn: Any) -> dict[tuple[str, str], list[tupl
     return by_asset
 
 
+def _build_job_failure_solution(
+    item_type: str,
+    asset_name: str,
+    error_code: str,
+    error_msg: str,
+    is_failed: bool,
+    lag_lbl: str,
+    sla_lbl: str,
+) -> tuple[str, str]:
+    """Build root cause ('Why it failed') and actionable steps ('Possible solution') for a pipeline or notebook run."""
+    msg_lower = f"{error_code} {error_msg}".lower()
+    if is_failed:
+        why = (
+            f"{item_type} '{asset_name}' failed with [{error_code}]: {error_msg}"
+            if error_msg
+            else f"{item_type} '{asset_name}' execution failed in Fabric Job Scheduler ({error_code})."
+        )
+    else:
+        why = (
+            f"{item_type} '{asset_name}' exceeded its freshness SLA target of <= {sla_lbl} "
+            f"(latest completed run was {lag_lbl} ago)."
+        )
+
+    if "token" in msg_lower or "auth" in msg_lower or "401" in msg_lower or "403" in msg_lower or "permission" in msg_lower:
+        solution = (
+            f"1. Re-authenticate the data source connection or workspace identity used by '{asset_name}'.\n"
+            f"2. Verify the executing identity has Contributor/ReadWrite access on target Lakehouses and SQL endpoints.\n"
+            f"3. Re-run '{asset_name}' from Fabric Monitor Hub once credentials are refreshed."
+        )
+    elif "timeout" in msg_lower or "capacity" in msg_lower or "throttl" in msg_lower or "429" in msg_lower:
+        solution = (
+            f"1. Check Fabric Capacity Metrics for CU throttling or paused capacity during the execution window.\n"
+            f"2. Stagger overlapping schedules or increase activity timeout in '{asset_name}'.\n"
+            f"3. Retry the failed run once capacity utilization stabilizes."
+        )
+    elif "schema" in msg_lower or "column" in msg_lower or "analysisexception" in msg_lower or "type" in msg_lower:
+        solution = (
+            f"1. Inspect upstream Lakehouse table schema changes (renamed/dropped columns or incompatible types).\n"
+            f"2. Update column mappings or enable Delta `.option('mergeSchema', 'true')` in '{asset_name}'.\n"
+            f"3. Re-run the {item_type.lower()} after aligning the target schema."
+        )
+    elif item_type == "Spark notebook":
+        solution = (
+            f"1. Open Spark notebook '{asset_name}' in Fabric and inspect the failed cell traceback in the Spark session logs.\n"
+            f"2. Verify the default Lakehouse attachment, notebook parameters, and OneLake table paths.\n"
+            f"3. Re-run the notebook interactively to confirm the fix before the next scheduled trigger."
+        )
+    else:
+        solution = (
+            f"1. Open Data pipeline '{asset_name}' in Fabric Monitor Hub and inspect the failed activity output.\n"
+            f"2. Verify source gateway/connector health, sink table locks, and activity retry policy.\n"
+            f"3. Trigger a manual retry from the failed activity once the upstream dependency is healthy."
+        )
+    return why[:950], solution[:950]
+
+
 def _profile_fabric_item_jobs(
     wid: str,
     item_id: str,
@@ -681,10 +737,14 @@ def _profile_fabric_item_jobs(
     now_dt: datetime,
     now_iso: str,
     fabric_token: str,
+    item_type: str = "Data pipeline",
+    asset_name: str = "",
 ) -> dict[str, Any]:
     """Query real Fabric Job Scheduler instances for a Pipeline, Notebook, or Semantic Model."""
     item_runs: list[dict] = []
     item_lags: list[dict] = []
+    item_diagnostics: list[dict] = []
+    disp_name = asset_name or asset_key
     try:
         url = f"https://api.fabric.microsoft.com/v1/workspaces/{wid}/items/{item_id}/jobs/instances"
         raw_jobs = _fabric_api_get(url, fabric_token).get("value", [])
@@ -704,6 +764,8 @@ def _profile_fabric_item_jobs(
             "last_refresh_at": now_iso,
             "runs": [],
             "lags": [],
+            "diagnostics": [],
+            "why_failed": None,
         }
 
     def _parse_job_ts(j: dict) -> datetime:
@@ -723,6 +785,7 @@ def _profile_fabric_item_jobs(
     failed_recent = latest_status in ("failed", "cancelled")
     is_late = lag_min > sla_min or failed_recent
     fresh_lbl = "Run failed" if failed_recent else format_lag_minutes(lag_min)
+    sla_lbl = format_lag_minutes(float(sla_min))
 
     chron_jobs = list(reversed(completed_jobs[:15]))
     for idx, j in enumerate(chron_jobs):
@@ -752,6 +815,61 @@ def _profile_fabric_item_jobs(
             "lag_minutes": step_lag,
         })
 
+    top_why_failed: str | None = None
+    for idx, j in enumerate(completed_jobs[:5]):
+        j_stat = str(j.get("status") or "Completed").lower()
+        j_failed = j_stat in ("failed", "cancelled")
+        if not j_failed and not (idx == 0 and is_late):
+            continue
+        fr = j.get("failureReason")
+        if isinstance(fr, dict):
+            err_code = str(fr.get("errorCode") or ("JobCancelled" if j_stat == "cancelled" else "JobExecutionFailed"))
+            err_msg = str(fr.get("message") or "").strip()
+        elif isinstance(fr, str) and fr.strip():
+            err_code = "JobExecutionFailed"
+            err_msg = fr.strip()
+        else:
+            err_code = "JobExecutionFailed" if j_failed else "FreshnessSlaBreach"
+            err_msg = ""
+
+        j_dt = _parse_job_ts(j)
+        j_iso = j_dt.replace(microsecond=0).isoformat()
+        why_str, sol_str = _build_job_failure_solution(
+            item_type,
+            disp_name,
+            err_code,
+            err_msg,
+            j_failed,
+            format_lag_minutes(lag_min),
+            sla_lbl,
+        )
+        if top_why_failed is None:
+            top_why_failed = why_str
+        run_id_str = str(j.get("id") or f"run-{idx + 1}")
+        item_diagnostics.append({
+            "workspace_id": wid,
+            "asset_key": asset_key,
+            "rule_name": f"Job Run: {err_code}"[:64],
+            "rule_definition": f"{item_type} ({j.get('invokeType') or 'Scheduled'})"[:128],
+            "primary_key": run_id_str[:120],
+            "failed_column": str(j.get("jobType") or item_type)[:120],
+            "failed_value": ("Run Failed" if j_failed else f"Late ({format_lag_minutes(lag_min)})")[:200],
+            "row_json": json.dumps({
+                "jobId": run_id_str,
+                "status": j.get("status"),
+                "jobType": j.get("jobType"),
+                "invokeType": j.get("invokeType"),
+                "startTimeUtc": j.get("startTimeUtc"),
+                "endTimeUtc": j.get("endTimeUtc"),
+                "errorCode": err_code,
+                "message": err_msg,
+            })[:1900],
+            "likely_cause": why_str,
+            "suggested_solution": sol_str,
+            "sql_fix": "",
+            "detected_at": j_iso,
+        })
+
     if failed_recent or lag_min > sla_min * 2:
         a_status = "critical"
         h_score = 68.0
@@ -770,6 +888,8 @@ def _profile_fabric_item_jobs(
         "last_refresh_at": latest_iso,
         "runs": item_runs,
         "lags": item_lags,
+        "diagnostics": item_diagnostics,
+        "why_failed": top_why_failed,
     }
 
 
@@ -821,17 +941,30 @@ def discover_and_profile_live_fabric(
             except Exception:
                 pass
 
+    host_ws_id = ""
+    try:
+        host_ws_id = str(spark.conf.get("trident.workspace.id") or "").strip().lower()
+    except Exception:
+        pass
+
     for w in ws_raw:
         if w.get("type") != "Workspace":
             continue
-        wid = w["id"]
+        wid = str(w["id"])
+        w_name = str(w.get("displayName") or wid)
+        if (
+            (host_ws_id and wid.lower() == host_ws_id)
+            or wid.lower() == "062bb73c-70f7-4d21-84c4-715a9dac1dba"
+            or w_name.lower().startswith("governly-observability")
+        ):
+            continue
         cid = str(w.get("capacityId") or "").lower()
         if not cid:
             continue
         is_cap_active = cap_active.get(cid, True)
         workspaces.append({
             "workspace_id": wid,
-            "name": w.get("displayName") or wid,
+            "name": w_name,
             "capacity_id": w.get("capacityId"),
             "capacity_sku": cap_sku.get(cid, "F2"),
             "is_monitored": wid not in excluded_ws_ids,
@@ -928,7 +1061,7 @@ def discover_and_profile_live_fabric(
             if i.get("type") == "Notebook"
             and not str(i.get("displayName") or "").startswith("nb_governly_")
         ]
-        ai_items = [i for i in items if i.get("type") in ("DataAgent", "MLModel", "MLExperiment")]
+        ai_items = [i for i in items if i.get("type") in ("MLModel", "MLExperiment")]
 
         ws_domains_seen: dict[str, str] = {}
         table_schemas_by_short: dict[str, list[tuple[str, str, list[tuple[str, str]]]]] = {}
@@ -1491,17 +1624,27 @@ def discover_and_profile_live_fabric(
                 })
 
         for pl in pipelines:
-            pl_key = str(pl.get("displayName") or pl["id"]).lower().replace(" ", "_")
+            pl_name = str(pl.get("displayName") or pl["id"])
+            pl_key = pl_name.lower().replace(" ", "_")
             ws_domains_seen.setdefault("engineering", "Data Engineering")
             pl_prof = _profile_fabric_item_jobs(
-                wid, str(pl["id"]), pl_key, 360, now_dt, now_iso, fabric_token
+                wid,
+                str(pl["id"]),
+                pl_key,
+                360,
+                now_dt,
+                now_iso,
+                fabric_token,
+                item_type="Data pipeline",
+                asset_name=pl_name,
             )
             runs.extend(pl_prof["runs"])
             lags.extend(pl_prof["lags"])
+            failed_rows.extend(pl_prof.get("diagnostics", []))
             assets.append({
                 "workspace_id": wid,
                 "asset_key": pl_key,
-                "name": pl.get("displayName") or pl_key,
+                "name": pl_name,
                 "asset_type": "Data pipeline",
                 "domain_key": "engineering",
                 "steward_object_id": ws_steward_id,
@@ -1519,16 +1662,43 @@ def discover_and_profile_live_fabric(
                 "quality_total": 0,
                 "fabric_item_url": f"https://app.fabric.microsoft.com/groups/{wid}/pipelines/{pl['id']}",
             })
+            if pl_prof["is_late"]:
+                inc_num = 1000 + (abs(hash(f"{wid}:{pl_key}:pipe")) % 8999)
+                is_run_fail = pl_prof["freshness_label"].lower().startswith("run fail")
+                incidents.append({
+                    "workspace_id": wid,
+                    "incident_key": f"INC-{inc_num}",
+                    "asset_key": pl_key,
+                    "asset_name": pl_name,
+                    "monitor_type": "Pipeline",
+                    "monitor_label": "Pipeline · Data Engineering",
+                    "severity": "Critical" if is_run_fail else "High",
+                    "title": f"Data pipeline {'run failed' if is_run_fail else 'SLA breached'}: {pl_name}",
+                    "root_cause_hint": pl_prof.get("why_failed") or f"Data pipeline {pl_name} breached its 6h SLA target.",
+                    "detected_at": now_iso,
+                    "sla_target_label": "6h",
+                    "observed_label": pl_prof["freshness_label"],
+                    "domain_key": "engineering",
+                })
 
         for nb in notebooks:
             nb_name = str(nb.get("displayName") or nb["id"])
             nb_key = f"notebook.{nb_name.lower().replace(' ', '_')}"
             ws_domains_seen.setdefault("engineering", "Data Engineering")
             nb_prof = _profile_fabric_item_jobs(
-                wid, str(nb["id"]), nb_key, 1440, now_dt, now_iso, fabric_token
+                wid,
+                str(nb["id"]),
+                nb_key,
+                1440,
+                now_dt,
+                now_iso,
+                fabric_token,
+                item_type="Spark notebook",
+                asset_name=nb_name,
             )
             runs.extend(nb_prof["runs"])
             lags.extend(nb_prof["lags"])
+            failed_rows.extend(nb_prof.get("diagnostics", []))
             assets.append({
                 "workspace_id": wid,
                 "asset_key": nb_key,
@@ -1550,6 +1720,24 @@ def discover_and_profile_live_fabric(
                 "quality_total": 0,
                 "fabric_item_url": f"https://app.fabric.microsoft.com/groups/{wid}/synapsenotebooks/{nb['id']}",
             })
+            if nb_prof["is_late"]:
+                inc_num = 1000 + (abs(hash(f"{wid}:{nb_key}:nb")) % 8999)
+                is_run_fail = nb_prof["freshness_label"].lower().startswith("run fail")
+                incidents.append({
+                    "workspace_id": wid,
+                    "incident_key": f"INC-{inc_num}",
+                    "asset_key": nb_key,
+                    "asset_name": nb_name,
+                    "monitor_type": "Pipeline",
+                    "monitor_label": "Spark Notebook · Data Engineering",
+                    "severity": "Critical" if is_run_fail else "High",
+                    "title": f"Spark notebook {'run failed' if is_run_fail else 'SLA breached'}: {nb_name}",
+                    "root_cause_hint": nb_prof.get("why_failed") or f"Spark notebook {nb_name} breached its 24h SLA target.",
+                    "detected_at": now_iso,
+                    "sla_target_label": "24h",
+                    "observed_label": nb_prof["freshness_label"],
+                    "domain_key": "engineering",
+                })
 
         for ai in ai_items:
             ai_name = str(ai.get("displayName") or ai["id"])

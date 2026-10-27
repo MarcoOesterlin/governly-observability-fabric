@@ -42,7 +42,7 @@ export function Quality() {
 
   const { rows: assets } = useAssets();
   const tableAssets = assets.filter((a) => a.type === 'Lakehouse table');
-  const selectableAssets = tableAssets.length > 0 ? tableAssets : assets;
+  const selectableAssets = tableAssets;
   const { rules: allUserRules } = useQualityRules();
   const allFailedRows = useAssetFailedRows(undefined, true);
   const [selectedAssetKey, setSelectedAssetKey] = useState<string>('*');
@@ -59,7 +59,7 @@ export function Quality() {
         ? selectedAssetKey
         : (firstWithFailure?.name ?? selectableAssets[0]?.name ?? '*');
 
-  const evaluatedAssets = assets.filter((a) => a.quality >= 0);
+  const evaluatedAssets = tableAssets.filter((a) => a.quality >= 0);
   const avgQuality =
     evaluatedAssets.length > 0
       ? Math.round(
@@ -239,7 +239,7 @@ export function Quality() {
               </div>
               <div style={css('display:flex;align-items:baseline;justify-content:space-between;margin-top:8px;')}>
                 <div style={css("font-size:26px;font-weight:700;color:var(--fg);font-family:'Geist Mono',monospace;")}>
-                  {healthyAssetsCount}/{assets.length}
+                  {healthyAssetsCount}/{tableAssets.length}
                 </div>
                 <span style={badge('#4338ca', '#eef2ff')}>Rule Studio</span>
               </div>
@@ -295,7 +295,7 @@ export function Quality() {
               <span>Status</span>
               <span style={css('text-align:right;')}>Actions</span>
             </div>
-            {assets.map((a) => {
+            {tableAssets.map((a) => {
               const assetFailRows = allFailedRows.filter((fr) => fr.assetKey === a.name).length;
               const assetRules = allUserRules.filter(
                 (r) => r.asset_key === a.name || r.asset_key === '*',

@@ -38,6 +38,23 @@ export async function initRuntimeClient(): Promise<RayfinClient<AppSchema, AppFu
   return client;
 }
 
+export function getHostWorkspaceId(): string | null {
+  const wsId =
+    client.runtimeConfig?.workspaceId ||
+    import.meta.env.VITE_FABRIC_WORKSPACE_ID ||
+    null;
+  if (!wsId || wsId === 'default-workspace' || wsId === 'all') return null;
+  return wsId;
+}
+
+export function isHostWorkspace(workspaceId?: string | null, displayName?: string | null): boolean {
+  const hostId = getHostWorkspaceId();
+  if (hostId && workspaceId === hostId) return true;
+  const nameLower = (displayName ?? '').trim().toLowerCase();
+  if (nameLower.startsWith('governly-observability')) return true;
+  return false;
+}
+
 export function getRuntimeWorkspaceId(preferredWorkspaceId?: string | null): string {
   if (preferredWorkspaceId && preferredWorkspaceId !== 'all') {
     return preferredWorkspaceId;

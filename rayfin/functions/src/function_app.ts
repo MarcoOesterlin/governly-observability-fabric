@@ -206,7 +206,14 @@ udf.func(
       : { value: [] };
 
     const discoveredWorkspaces = (wsListData.value ?? [])
-      .filter((w) => w.type === 'Workspace' && Boolean(w.capacityId))
+      .filter(
+        (w) =>
+          w.type === 'Workspace' &&
+          Boolean(w.capacityId) &&
+          w.id !== workspaceId &&
+          w.id !== hostWorkspaceId &&
+          !(w.displayName ?? '').toLowerCase().startsWith('governly-observability'),
+      )
       .map((w) => ({
         workspace_id: w.id,
         display_name: w.displayName || w.id,

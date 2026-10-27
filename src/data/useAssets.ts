@@ -1,6 +1,6 @@
 import { ALL_WORKSPACES_ID, useWorkspace } from "../app/WorkspaceProvider";
 import type { AssetFixture } from "../fixtures/types";
-import { client } from "./client";
+import { client, isHostWorkspace } from "./client";
 import { toAssetFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { AssetFilter } from "./queryKeys";
@@ -37,6 +37,7 @@ export function useAssets(filter: AssetFilter = {}): {
     async () => {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
       const baseQuery = client.data.PubAsset.select([
+        "workspace_id",
         "asset_key",
         "name",
         "asset_type",
@@ -86,7 +87,16 @@ export function useAssets(filter: AssetFilter = {}): {
       );
       const pubQList = Array.isArray(qResults) ? qResults : [];
 
-      return res.map((r) => {
+      const validAssets = res.filter((r) => {
+        if (isHostWorkspace(r.workspace_id)) return false;
+        const aType = String(r.asset_type ?? "").trim().toLowerCase();
+        const aKeyLower = String(r.asset_key ?? r.name ?? "").trim().toLowerCase();
+        if (aType === "dataagent" || aKeyLower.startsWith("dataagent.")) return false;
+        return true;
+      });
+      if (validAssets.length === 0) return [];
+
+      return validAssets.map((r) => {
         const base = toAssetFixture(r);
         const aKey = r.asset_key || r.name || base.id;
         const shortName = aKey.includes(".") ? aKey.split(".").pop()! : aKey;

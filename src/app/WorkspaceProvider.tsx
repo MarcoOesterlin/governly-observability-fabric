@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { client, getRuntimeWorkspaceId } from "../data/client";
+import { client, getRuntimeWorkspaceId, isHostWorkspace } from "../data/client";
 import {
   ALL_WORKSPACES_EVENT,
   COMPUTE_CONFIG_EVENT,
@@ -193,12 +193,14 @@ export function WorkspaceProvider({
           "is_monitored",
         ]).execute();
         if (cancelled) return;
-        const mapped: WorkspaceOption[] = (Array.isArray(wsRows) ? wsRows : []).map((w) => ({
-          workspace_id: w.workspace_id,
-          display_name: w.display_name,
-          role: "Admin",
-          capacity_sku: w.capacity_sku ?? "F2",
-        }));
+        const mapped: WorkspaceOption[] = (Array.isArray(wsRows) ? wsRows : [])
+          .filter((w) => !isHostWorkspace(w.workspace_id, w.display_name))
+          .map((w) => ({
+            workspace_id: w.workspace_id,
+            display_name: w.display_name,
+            role: "Admin",
+            capacity_sku: w.capacity_sku ?? "F2",
+          }));
         const mergedAll = mapped.length > 0 ? saveCachedAllWorkspaces(mapped) : loadCachedAllWorkspaces();
         if (mapped.length > 0) {
           setDbHasScan(true);

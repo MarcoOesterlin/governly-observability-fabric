@@ -90,14 +90,18 @@ export function useAssetFreshness(assetKey?: string): {
       ]);
       const mappedRuns: RefreshRunFixture[] = Array.isArray(rows)
         ? rows.map((r) => {
+            const rawRes = String(r.result ?? "").toLowerCase();
+            const rawLbl = String(r.result_label ?? "");
+            const isHardFail =
+              rawRes === "failed" ||
+              rawRes === "err" ||
+              rawLbl.toLowerCase().includes("fail");
             const parsedRunLag = parseLagLabelToMinutes(r.lag_label);
             const isBreach =
-              parsedRunLag !== null
+              isHardFail ||
+              (parsedRunLag !== null
                 ? parsedRunLag > slaMinutes
-                : r.result === "breach" ||
-                  r.result === "Breach" ||
-                  r.result === "warn" ||
-                  r.result === "err";
+                : rawRes === "breach" || rawRes === "warn");
             return {
               time:
                 r.time_label ||
@@ -107,7 +111,7 @@ export function useAssetFreshness(assetKey?: string): {
               lag: r.lag_label,
               rows: r.rows_label,
               result: (isBreach ? "breach" : "ok") as "ok" | "breach",
-              label: isBreach ? "SLA Breach" : "On time",
+              label: isHardFail ? "Run Failed" : isBreach ? "SLA Breach" : "On time",
             };
           })
         : [];
@@ -278,22 +282,87 @@ export function useAssetFailedRows(assetKey?: string, includeAllAssets = false):
               .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey } })
               .execute();
       if (!Array.isArray(rows) || rows.length === 0) return [];
-      return rows.map((r: any) => ({
-        id: String(r.id),
-        assetKey: String(r.asset_key ?? ""),
-        ruleName: String(r.rule_name ?? ""),
-        ruleDefinition: String(r.rule_definition ?? ""),
-        primaryKey: String(r.primary_key ?? ""),
-        failedColumn: String(r.failed_column ?? ""),
-        failedValue: String(r.failed_value ?? ""),
-        rowJson: String(r.row_json ?? "{}"),
-        likelyCause: String(r.likely_cause ?? ""),
-        suggestedSolution: String(r.suggested_solution ?? ""),
-        sqlFix: String(r.sql_fix ?? ""),
-        detectedAt: String(r.detected_at ?? ""),
-      }));
+      return rows
+        .filter((r: any) => !String(r.rule_name ?? "").startsWith("Job Run:"))
+        .map((r: any) => ({
+          id: String(r.id),
+          assetKey: String(r.asset_key ?? ""),
+          ruleName: String(r.rule_name ?? ""),
+          ruleDefinition: String(r.rule_definition ?? ""),
+          primaryKey: String(r.primary_key ?? ""),
+          failedColumn: String(r.failed_column ?? ""),
+          failedValue: String(r.failed_value ?? ""),
+          rowJson: String(r.row_json ?? "{}"),
+          likelyCause: String(r.likely_cause ?? ""),
+          suggestedSolution: String(r.suggested_solution ?? ""),
+          sqlFix: String(r.sql_fix ?? ""),
+          detectedAt: String(r.detected_at ?? ""),
+        }));
     },
     EMPTY_FAILED_ROWS,
+    refreshTick
+  );
+}
+
+export interface JobFailureDiagnostic {
+  id: string;
+  assetKey: string;
+  assetType: string;
+  runId: string;
+  statusLabel: string;
+  errorCode: string;
+  whyFailed: string;
+  possibleSolution: string;
+  detectedAt: string;
+}
+
+const EMPTY_JOB_DIAGNOSTICS: JobFailureDiagnostic[] = [];
+
+export function useJobFailureDiagnostics(assetKey?: string): JobFailureDiagnostic[] {
+  const { workspaceId, refreshTick } = useWorkspace();
+
+  return useCachedQuery(
+    workspaceId ? `job-failure-diagnostics:${workspaceId}:${assetKey ?? "*"}` : null,
+    async () => {
+      const isAllWs = workspaceId === ALL_WORKSPACES_ID;
+      const pubFailedRowRepo = (client.data as Record<string, any>).PubQualityFailedRow;
+      if (!pubFailedRowRepo) return [];
+      const baseQuery = pubFailedRowRepo.select([
+        "id",
+        "asset_key",
+        "rule_name",
+        "rule_definition",
+        "primary_key",
+        "failed_value",
+        "likely_cause",
+        "suggested_solution",
+        "detected_at",
+      ]);
+      const rows = !assetKey
+        ? isAllWs
+          ? await baseQuery.execute()
+          : await baseQuery.where({ workspace_id: { eq: workspaceId! } }).execute()
+        : isAllWs
+          ? await baseQuery.where({ asset_key: { eq: assetKey } }).execute()
+          : await baseQuery
+              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey } })
+              .execute();
+      if (!Array.isArray(rows) || rows.length === 0) return [];
+      return rows
+        .filter((r: any) => String(r.rule_name ?? "").startsWith("Job Run:"))
+        .map((r: any) => ({
+          id: String(r.id),
+          assetKey: String(r.asset_key ?? ""),
+          assetType: String(r.rule_definition ?? "Pipeline / Notebook").split("·")[0].trim(),
+          runId: String(r.primary_key ?? "latest"),
+          statusLabel: String(r.failed_value ?? "Failed"),
+          errorCode: String(r.rule_name ?? "").replace(/^Job Run:\s*/i, "") || "JobExecutionFailed",
+          whyFailed: String(r.likely_cause ?? ""),
+          possibleSolution: String(r.suggested_solution ?? ""),
+          detectedAt: String(r.detected_at ?? ""),
+        }));
+    },
+    EMPTY_JOB_DIAGNOSTICS,
     refreshTick
   );
 }

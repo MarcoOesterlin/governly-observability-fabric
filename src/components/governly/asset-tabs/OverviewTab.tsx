@@ -2,6 +2,7 @@ import { Box } from '../Box';
 import { css } from '../../../lib/css';
 import { badge, dot, pill } from '../primitives';
 import { useAsset, useAssetFreshness, useAssetQuality } from '../../../data/useAsset';
+import { formatSlaMinutes } from '../../../data/useFreshnessSla';
 import { useIncidents } from '../../../data/useIncidents';
 import type { QualityRuleFixture } from '../../../fixtures/types';
 import { buildLagPolyline } from './FreshnessTab';
@@ -27,14 +28,23 @@ export function OverviewTab({
   const allIncidents = useIncidents();
   const qualityRules = propRules ?? liveRules;
 
+  const isTableAsset = asset.type === 'Lakehouse table';
   const passCount = qualityRules.filter((r) => r.result === 'pass').length;
   const failCount = qualityRules.filter((r) => r.result === 'fail').length;
   const warnCount = qualityRules.filter((r) => r.result === 'warn').length;
   const slaMin = asset.slaMinutes ?? 60;
-  const slaLabel = slaMin >= 60 ? `${Math.round(slaMin / 60)}h` : `${slaMin}m`;
+  const slaLabel = formatSlaMinutes(slaMin);
+  const midAxisLabel = formatSlaMinutes(Math.round(slaMin * 1.5));
+  const topAxisLabel = formatSlaMinutes(Math.round(slaMin * 2));
   const { points, lastY } = buildLagPolyline(lagPoints, slaMin);
   const dotColor = asset.late ? 'var(--crit)' : 'var(--ok)';
-  const activeMonitorNames = Array.from(new Set(['Freshness', 'Schema', ...qualityRules.map((r) => r.name)]));
+  const activeMonitorNames = Array.from(
+    new Set(
+      isTableAsset
+        ? ['Freshness', 'Schema', ...qualityRules.map((r) => r.name)]
+        : ['Job Execution', 'Freshness SLA'],
+    ),
+  );
   const assetIncidents = allIncidents
     .filter((i) => i.asset === assetKey && i.status !== 'Resolved')
     .map((i) => ({
@@ -44,17 +54,27 @@ export function OverviewTab({
       sub: `${i.sev} · opened ${i.age} · ${i.monitor}`,
     }));
 
-  const healthVal = asset.healthScore ?? Math.round(asset.quality >= 0 ? asset.quality : 100);
   const slaBreached = asset.late;
+  const rawHealth = asset.healthScore ?? Math.round(asset.quality >= 0 ? asset.quality : 100);
+  const healthVal = failCount === 0 && !slaBreached && rawHealth >= 98 ? 100 : rawHealth;
   const volumeLabel = asset.rowCountLabel ?? (runs[0]?.rows && runs[0].rows !== '—' ? runs[0].rows : '—');
   const healthDeltaPts = Math.round(healthVal - 100);
   const healthSubText =
-    healthDeltaPts < 0
+    healthDeltaPts < 0 && (failCount > 0 || slaBreached)
       ? `${healthDeltaPts} pts (${failCount} failing${slaBreached ? ', SLA breach' : ''})`
-      : `${asset.status} status · 100% nominal`;
+      : 'Healthy · all checks within target';
+  const freshNormalized = (asset.fresh || '').trim();
+  const isGenericFresh =
+    !freshNormalized ||
+    freshNormalized.toLowerCase() === 'active' ||
+    freshNormalized.toLowerCase() === 'no runs yet';
   const slaComparisonSub = slaBreached
-    ? `${asset.fresh} vs ${slaLabel} target`
-    : `last refresh ${asset.fresh} (target ≤ ${slaLabel})`;
+    ? freshNormalized.toLowerCase().includes('failed')
+      ? `Latest run failed · SLA target ≤ ${slaLabel}`
+      : `Updated ${freshNormalized} · exceeds ${slaLabel} SLA`
+    : isGenericFresh
+      ? `SLA target ≤ ${slaLabel}`
+      : `Updated ${freshNormalized} · SLA target ≤ ${slaLabel}`;
   const volumeSubText =
     runs.length >= 2 && runs[0]?.rows && runs[0].rows !== '—'
       ? `Latest commit ${runs[0].rows} · ${asset.domain} domain`
@@ -82,9 +102,15 @@ export function OverviewTab({
           </div>
         </div>
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;padding:16px;box-shadow:var(--shadow);')}>
-          <div style={css('font-size:12px;color:var(--fgm);font-weight:500;')}>Quality checks</div>
+          <div style={css('font-size:12px;color:var(--fgm);font-weight:500;')}>
+            {isTableAsset ? 'Quality checks' : 'Execution status'}
+          </div>
           <div style={css("font-size:26px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);margin-top:8px;")}>
-            {qualityRules.length > 0 ? (
+            {!isTableAsset ? (
+              <span style={css(`color:${slaBreached ? 'var(--crit)' : 'var(--ok)'};`)}>
+                {freshNormalized.toLowerCase().includes('failed') ? 'Failed' : slaBreached ? 'Delayed' : 'Passing'}
+              </span>
+            ) : qualityRules.length > 0 ? (
               <>
                 {passCount}<span style={css('font-size:14px;color:var(--fgs);')}>/{qualityRules.length} pass</span>
               </>
@@ -92,8 +118,12 @@ export function OverviewTab({
               <span style={css('color:var(--fgs);')}>N/A</span>
             )}
           </div>
-          <div style={css(`font-size:11.5px;color:${qualityRules.length === 0 ? 'var(--fgs)' : failCount > 0 ? 'var(--crit)' : 'var(--ok)'};margin-top:3px;`)}>
-            {qualityRules.length === 0 ? 'No quality rules applied yet' : `${failCount} failing · ${warnCount} warning`}
+          <div style={css(`font-size:11.5px;color:${!isTableAsset ? 'var(--fgs)' : qualityRules.length === 0 ? 'var(--fgs)' : failCount > 0 ? 'var(--crit)' : 'var(--ok)'};margin-top:3px;`)}>
+            {!isTableAsset
+              ? `${runs.length} recorded job run${runs.length === 1 ? '' : 's'}`
+              : qualityRules.length === 0
+                ? 'No quality rules applied yet'
+                : `${failCount} failing · ${warnCount} warning`}
           </div>
         </div>
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;padding:16px;box-shadow:var(--shadow);')}>
@@ -115,21 +145,21 @@ export function OverviewTab({
             </div>
             <span style={css('font-size:11.5px;color:var(--fgm);display:flex;align-items:center;gap:6px;')}>
               <span style={css('width:14px;height:0;border-top:2px dashed var(--crit);display:inline-block;')} />
-              SLA {slaLabel}
+              SLA target: {slaLabel}
             </span>
           </div>
           <svg viewBox="0 0 680 220" style={css('width:100%;height:210px;display:block;')}>
-            <line x1="40" y1="40" x2="680" y2="40" stroke="var(--border)" strokeWidth="1" />
-            <line x1="40" y1="90" x2="680" y2="90" stroke="var(--border)" strokeWidth="1" />
-            <line x1="40" y1="140" x2="680" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" />
-            <line x1="40" y1="194" x2="680" y2="194" stroke="var(--border)" strokeWidth="1" />
-            <text x="6" y="44" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">3h</text>
-            <text x="6" y="94" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">2h</text>
+            <line x1="46" y1="40" x2="680" y2="40" stroke="var(--border)" strokeWidth="1" />
+            <line x1="46" y1="90" x2="680" y2="90" stroke="var(--border)" strokeWidth="1" />
+            <line x1="46" y1="140" x2="680" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" />
+            <line x1="46" y1="194" x2="680" y2="194" stroke="var(--border)" strokeWidth="1" />
+            <text x="6" y="44" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">{topAxisLabel}</text>
+            <text x="6" y="94" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">{midAxisLabel}</text>
             <text x="6" y="144" fontSize="10" fill="var(--crit)" fontFamily="Geist Mono">{slaLabel}</text>
-            <text x="6" y="198" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">0</text>
+            <text x="6" y="198" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">0m</text>
             <polyline points={points} fill="none" stroke="var(--info)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
             <circle cx="660" cy={lastY} r="4.5" fill={dotColor} />
-            <text x="600" y={Math.max(20, lastY - 10)} fontSize="10.5" fill={dotColor} fontFamily="Geist Mono" fontWeight="600">{asset.fresh}</text>
+            <text x="590" y={Math.max(20, lastY - 10)} fontSize="10.5" fill={dotColor} fontFamily="Geist Mono" fontWeight="600">{asset.fresh}</text>
           </svg>
           {lagLabels.length > 0 && (
             <div style={css("display:flex;justify-content:space-between;font-size:10.5px;color:var(--fgs);font-family:'Geist Mono',monospace;padding-left:36px;")}>
@@ -177,25 +207,27 @@ export function OverviewTab({
         </div>
       </div>
 
-      <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
-        <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);font-size:14px;font-weight:600;color:var(--fg);')}>
-          Quality checks
-        </div>
-        {qualityRules.map((q) => {
-          const r = RESULT[q.result];
-          return (
-            <div key={q.name} style={css('display:grid;grid-template-columns:24px 1.4fr 1.6fr 1fr 80px;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);')}>
-              <div style={css(`color:${r[1]};font-size:17px;display:flex;`)}>
-                <i className={`ph ${r[0]}`} aria-hidden="true" />
+      {isTableAsset && (
+        <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
+          <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);font-size:14px;font-weight:600;color:var(--fg);')}>
+            Quality checks
+          </div>
+          {qualityRules.map((q) => {
+            const r = RESULT[q.result];
+            return (
+              <div key={q.name} style={css('display:grid;grid-template-columns:24px 1.4fr 1.6fr 1fr 80px;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);')}>
+                <div style={css(`color:${r[1]};font-size:17px;display:flex;`)}>
+                  <i className={`ph ${r[0]}`} aria-hidden="true" />
+                </div>
+                <span style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{q.name}</span>
+                <span style={css("font-size:12.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>{q.detail}</span>
+                <span style={css("font-size:12.5px;color:var(--fg);font-family:'Geist Mono',monospace;")}>{q.value}</span>
+                <span style={badge(r[1], r[2])}>{r[3]}</span>
               </div>
-              <span style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{q.name}</span>
-              <span style={css("font-size:12.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>{q.detail}</span>
-              <span style={css("font-size:12.5px;color:var(--fg);font-family:'Geist Mono',monospace;")}>{q.value}</span>
-              <span style={badge(r[1], r[2])}>{r[3]}</span>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

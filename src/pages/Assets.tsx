@@ -6,9 +6,11 @@ import { css } from '../lib/css';
 
 export function Assets({ assets: propAssets }: { assets?: AssetFixture[] } = {}) {
   const { rows: liveAssets } = useAssets();
-  const assets = propAssets ?? liveAssets;
+  const baseAssets = (propAssets ?? liveAssets).filter(
+    (a) => a.type !== 'Spark notebook' && a.type.toLowerCase() !== 'dataagent'
+  );
   const [query, setQuery] = useState('');
-  const filtered = assets.filter(
+  const filtered = baseAssets.filter(
     (a) =>
       a.name.toLowerCase().includes(query.toLowerCase()) ||
       a.domain.toLowerCase().includes(query.toLowerCase())

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspace, type WorkspaceOption } from '../app/WorkspaceProvider';
-import { client, getRuntimeWorkspaceId } from './client';
+import { client, getRuntimeWorkspaceId, isHostWorkspace } from './client';
 import { invalidateQueryCache } from './queryCache';
 import { useCurrentSteward } from './useCurrentSteward';
 
@@ -118,19 +118,36 @@ export function loadCachedAllWorkspaces(): WorkspaceOption[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as WorkspaceOption[];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((w) => Boolean(w?.workspace_id));
+    return parsed.filter(
+      (w) => Boolean(w?.workspace_id) && !isHostWorkspace(w.workspace_id, w.display_name),
+    );
   } catch {
     return [];
   }
 }
 
-export function saveCachedAllWorkspaces(workspaces: WorkspaceOption[]): WorkspaceOption[] {
+export function saveCachedAllWorkspaces(
+  workspaces: WorkspaceOption[],
+  knownHostWorkspaceId?: string | null,
+): WorkspaceOption[] {
   const byId = new Map<string, WorkspaceOption>();
   for (const w of loadCachedAllWorkspaces()) {
-    if (w?.workspace_id) byId.set(w.workspace_id, w);
+    if (
+      w?.workspace_id &&
+      w.workspace_id !== knownHostWorkspaceId &&
+      !isHostWorkspace(w.workspace_id, w.display_name)
+    ) {
+      byId.set(w.workspace_id, w);
+    }
   }
   for (const w of workspaces) {
-    if (!w?.workspace_id) continue;
+    if (
+      !w?.workspace_id ||
+      w.workspace_id === knownHostWorkspaceId ||
+      isHostWorkspace(w.workspace_id, w.display_name)
+    ) {
+      continue;
+    }
     byId.set(w.workspace_id, {
       workspace_id: w.workspace_id,
       display_name: w.display_name || w.workspace_id,
@@ -141,7 +158,7 @@ export function saveCachedAllWorkspaces(workspaces: WorkspaceOption[]): Workspac
   const merged = Array.from(byId.values()).sort((a, b) =>
     a.display_name.localeCompare(b.display_name),
   );
-  if (typeof window !== 'undefined' && merged.length > 0) {
+  if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(ALL_WORKSPACES_STORAGE_KEY, JSON.stringify(merged));
       window.dispatchEvent(new CustomEvent(ALL_WORKSPACES_EVENT));
@@ -344,7 +361,7 @@ export function useComputeConfig() {
             try {
               const discovered = JSON.parse(res.workspacesJson) as WorkspaceOption[];
               if (Array.isArray(discovered) && discovered.length > 0) {
-                saveCachedAllWorkspaces(discovered);
+                saveCachedAllWorkspaces(discovered, res.workspaceId);
               }
             } catch {
               // ignore

@@ -28,12 +28,12 @@ export const SLA_PRESETS: Array<{ label: string; minutes: number }> = [
 export function formatSlaMinutes(slaMin: number): string {
   if (!slaMin || slaMin <= 0) return '1h';
   if (slaMin < 60) return `${Math.round(slaMin)}m`;
-  if (slaMin < 1440) {
+  if (slaMin <= 1440) {
     const hrs = slaMin / 60;
     return Number.isInteger(hrs) ? `${hrs}h` : `${hrs.toFixed(1)}h`;
   }
   const days = slaMin / 1440;
-  return Number.isInteger(days) ? `${days}d` : `${Math.round(slaMin / 60)}h`;
+  return Number.isInteger(days) ? `${days}d` : `${days.toFixed(1)}d`;
 }
 
 export function parseLagLabelToMinutes(raw?: string | null): number | null {

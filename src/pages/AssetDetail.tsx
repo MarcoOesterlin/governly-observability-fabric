@@ -32,8 +32,12 @@ export function AssetDetail() {
   const { assetKey = '', tab } = useParams<{ assetKey: string; tab?: string }>();
   const navigate = useNavigate();
 
-  const validTab: TabKey = TABS_DEF.some(([k]) => k === tab) ? (tab as TabKey) : 'overview';
   const asset = useAsset(assetKey);
+  const isTableAsset = asset.type === 'Lakehouse table';
+  const visibleTabs = isTableAsset
+    ? TABS_DEF
+    : TABS_DEF.filter(([k]) => k !== 'quality' && k !== 'schema');
+  const validTab: TabKey = visibleTabs.some(([k]) => k === tab) ? (tab as TabKey) : 'overview';
   const rules = useAssetQuality(asset.name);
   const allIncidents = useIncidents();
   const assetIncidents = allIncidents.filter((i) => i.asset === asset.name && i.status !== 'Resolved');
@@ -128,7 +132,7 @@ export function AssetDetail() {
       </div>
 
       <div role="tablist" style={css('display:flex;gap:4px;border-bottom:1px solid var(--border,#e7e7ea);margin-bottom:20px;')}>
-        {TABS_DEF.map(([k, l]) => {
+        {visibleTabs.map(([k, l]) => {
           const count =
             k === 'incidents'
               ? assetIncidents.length > 0
