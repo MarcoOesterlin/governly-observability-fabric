@@ -1162,14 +1162,22 @@ def discover_and_profile_live_fabric(
                         ts_val = hd.get("timestamp")
                         ts_iso = ts_val.astimezone(timezone.utc).replace(microsecond=0).isoformat() if isinstance(ts_val, datetime) else now_iso
                         metrics = hd.get("operationMetrics") or {}
+                        op_name = str(hd.get("operation") or "WRITE").upper()
+                        ins_r = int(metrics.get("numTargetRowsInserted") or metrics.get("numAddedRows") or metrics.get("numOutputRows") or 0)
+                        upd_r = int(metrics.get("numTargetRowsUpdated") or metrics.get("numUpdatedRows") or 0)
+                        del_r = int(metrics.get("numTargetRowsDeleted") or metrics.get("numRemovedRows") or 0)
                         commits.append({
                             "version": int(hd.get("version") or 0),
                             "ts": ts_iso,
                             "user": str(hd.get("userName") or ws_steward_name),
                             "rows": int(metrics.get("numOutputRows") or row_count),
+                            "op": op_name,
+                            "ins": ins_r,
+                            "upd": upd_r,
+                            "del": del_r,
                         })
                 except Exception:
-                    commits = [{"version": 0, "ts": now_iso, "user": ws_steward_name, "rows": row_count}]
+                    commits = [{"version": 0, "ts": now_iso, "user": ws_steward_name, "rows": row_count, "op": "WRITE", "ins": row_count, "upd": 0, "del": 0}]
 
                 latest_iso = commits[0]["ts"] if commits else now_iso
                 try:
@@ -1250,7 +1258,7 @@ def discover_and_profile_live_fabric(
                 matching_user_rules = [
                     ur
                     for ur in (custom_rules or [])
-                    if str(ur.get("rule_type") or "") not in ("freshness_sla", "compute_config", "workspace_monitor")
+                    if str(ur.get("rule_type") or "") not in ("freshness_sla", "landing_time_sla", "compute_config", "workspace_monitor")
                     and not str(ur.get("asset_key") or "").startswith("__")
                     and (not ur.get("workspace_id") or ur["workspace_id"] == wid or ur["workspace_id"] == "all")
                     and ur.get("asset_key") in (asset_key, table_name, "*")
@@ -1365,6 +1373,53 @@ def discover_and_profile_live_fabric(
                     })
 
                 quality.extend(asset_q)
+
+                # Publish operational row count drift (Before vs After processing) from Delta DESCRIBE HISTORY
+                c0 = commits[0] if commits else {"rows": row_count, "op": "WRITE", "ins": 0, "upd": 0, "del": 0}
+                rows_before_est = (
+                    int(commits[1]["rows"])
+                    if len(commits) > 1 and int(commits[1].get("rows") or 0) > 0
+                    else max(0, row_count - int(c0.get("ins") or 0) + int(c0.get("del") or 0))
+                )
+                quality.append({
+                    "workspace_id": wid,
+                    "monitor_key": f"{asset_key}:ops_drift"[:64],
+                    "asset_key": asset_key,
+                    "rule_name": "Row count drift (before vs after)",
+                    "definition": f"Start {rows_before_est:,} -> After {row_count:,} (op={c0.get('op', 'WRITE')})"[:128],
+                    "passed": True,
+                    "pass_rate": 100.0,
+                    "observed_label": f"+{int(c0.get('ins') or 0):,} ins · {int(c0.get('upd') or 0):,} upd"[:32],
+                })
+
+                # Profile daily null rates on up to 4 key columns in a single Spark SQL pass
+                key_col_names = [
+                    f.name
+                    for idx_f, f in enumerate(fields)
+                    if idx_f == 0 or any(tok in f.name.lower() for tok in ("_id", "_key", "_code", "_date", "amount", "status"))
+                ][:4]
+                if key_col_names and row_count > 0:
+                    try:
+                        agg_exprs = [f"SUM(CASE WHEN `{kc}` IS NULL THEN 1 ELSE 0 END) AS `n_{i}`" for i, kc in enumerate(key_col_names)]
+                        null_row = df.selectExpr(*agg_exprs).first()
+                        if null_row is not None:
+                            nd = null_row.asDict()
+                            for i, kc in enumerate(key_col_names):
+                                n_cnt = int(nd.get(f"n_{i}") or 0)
+                                n_pct = round((n_cnt / row_count) * 100.0, 2)
+                                quality.append({
+                                    "workspace_id": wid,
+                                    "monitor_key": f"{asset_key}:knull_{kc}"[:64],
+                                    "asset_key": asset_key,
+                                    "rule_name": f"Key Null Rate ({kc})"[:64],
+                                    "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],
+                                    "passed": n_pct <= 2.0,
+                                    "pass_rate": round(100.0 - n_pct, 2),
+                                    "observed_label": f"{n_pct:.2f}% null"[:32],
+                                })
+                    except Exception:
+                        pass
+
                 q_total = len(asset_q)
                 q_pass = sum(1 for r in asset_q if r["passed"])
                 q_score = round(sum(float(r["pass_rate"]) for r in asset_q) / q_total, 1) if q_total else -1.0

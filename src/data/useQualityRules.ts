@@ -191,11 +191,13 @@ export function isSystemQualityRuleRow(r: {
   const rn = String(r.rule_name ?? '').trim();
   return (
     rt === 'freshness_sla' ||
+    rt === 'landing_time_sla' ||
     rt === 'compute_config' ||
     rt === 'workspace_monitor' ||
     ak.startsWith('__') ||
     rn === 'Governly Compute Configuration' ||
-    rn.startsWith('Monitor Workspace:')
+    rn.startsWith('Monitor Workspace:') ||
+    rn.startsWith('Expected Landing Time')
   );
 }
 

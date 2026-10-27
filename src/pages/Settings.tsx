@@ -9,9 +9,12 @@ import {
 } from '../data/useComputeConfig';
 import {
   formatSlaMinutes,
+  LANDING_TIME_PRESETS,
   SLA_PRESETS,
+  useExpectedLandingTimes,
   useFreshnessSlas,
 } from '../data/useFreshnessSla';
+import { useAssets, useRuntimeAssets } from '../data/useAssets';
 import {
   DEFAULT_SIGNAL_THRESHOLDS,
   useLastPublishRun,
@@ -25,6 +28,25 @@ export function Settings() {
   const [thresholds, setThresholds] = useSignalThresholds();
   const { slaMap, setSlaTarget, saving: slaSaving } = useFreshnessSlas();
   const defaultSlaMinutes = slaMap['*'] ?? 720;
+  const {
+    landingMap,
+    setExpectedLandingTime,
+    saving: landingSaving,
+  } = useExpectedLandingTimes();
+  const defaultLandingTime = landingMap['*'] ?? 'auto';
+  const { allRows: dataAssets } = useAssets({ includeRuntime: true });
+  const { rows: runtimeAssets } = useRuntimeAssets();
+  const allConfigurableItems = Array.from(
+    new Map([...runtimeAssets, ...dataAssets].map((a) => [a.name, a])).values(),
+  );
+  const [selectedLandingAsset, setSelectedLandingAsset] = useState<string>('');
+  const [customLandingClock, setCustomLandingClock] = useState<string>('06:00');
+  const [landingSavedNotice, setLandingSavedNotice] = useState<string | null>(null);
+  const activeLandingAssetKey =
+    selectedLandingAsset || allConfigurableItems[0]?.name || 'sales.fact_orders';
+  const customOverrides = Object.entries(landingMap).filter(
+    ([k, v]) => k !== '*' && v && v !== 'auto',
+  );
   const lastSync = useLastPublishRun();
   const {
     config: computeConfig,
@@ -551,6 +573,183 @@ export function Settings() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div style={css('border-top:1px solid var(--border);padding-top:14px;display:flex;flex-direction:column;gap:12px;')}>
+          <div style={css('display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;')}>
+            <div>
+              <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+                <span style={css('font-size:13.5px;font-weight:600;color:var(--fg);')}>
+                  Expected Landing Time Policy (Auto Average vs. Steward Override)
+                </span>
+                <span
+                  style={css(
+                    "font-size:11px;font-weight:600;font-family:'Geist Mono',monospace;padding:2px 8px;border-radius:999px;background:var(--okb,#f0fdf4);color:var(--ok,#16a34a);border:1px solid var(--ok,#16a34a);",
+                  )}
+                >
+                  {defaultLandingTime === 'auto'
+                    ? 'Default: Auto Avg (≥2 runs)'
+                    : `Default: ${defaultLandingTime}`}
+                </span>
+                {landingSavedNotice && (
+                  <span style={css("font-size:11px;font-weight:600;color:var(--ok,#16a34a);")}>
+                    {landingSavedNotice}
+                  </span>
+                )}
+              </div>
+              <div style={css('font-size:12px;color:var(--fgm);margin-top:2px;')}>
+                After 2+ runs, Governly automatically calculates each pipeline or table&apos;s average landing time (24h circular mean) and compares daily arrivals against it. Stewards and engineers can also define a fixed expected landing time globally or per item below.
+              </div>
+            </div>
+            <div style={css('display:flex;align-items:center;gap:8px;')}>
+              <span style={css('font-size:11.5px;color:var(--fgm);font-weight:600;')}>
+                Global Default:
+              </span>
+              <select
+                aria-label="Global Expected Landing Time"
+                disabled={landingSaving}
+                value={
+                  LANDING_TIME_PRESETS.some((p) => p.value === defaultLandingTime)
+                    ? defaultLandingTime
+                    : 'auto'
+                }
+                onChange={(e) => {
+                  const val = e.target.value;
+                  void setExpectedLandingTime('*', val);
+                  setLandingSavedNotice(
+                    val === 'auto'
+                      ? '✓ Global policy set to Auto Average'
+                      : `✓ Global expected landing set to ${val}`,
+                  );
+                }}
+                style={css(
+                  "height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--card2);color:var(--fg);font-size:12.5px;font-weight:600;font-family:'Geist Mono',monospace;cursor:pointer;",
+                )}
+              >
+                {LANDING_TIME_PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div
+            style={css(
+              'padding:12px 14px;border-radius:10px;border:1px solid var(--border,#e7e7ea);background:var(--card2,#fafafa);display:flex;flex-direction:column;gap:10px;',
+            )}
+          >
+            <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;')}>
+              <span style={css('font-size:12.5px;font-weight:600;color:var(--fg);')}>
+                Per-Asset / Pipeline Expected Landing Time Override
+              </span>
+              <span style={css("font-size:11.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>
+                Current for {activeLandingAssetKey}:{' '}
+                <b style={css('color:var(--fg);')}>
+                  {landingMap[activeLandingAssetKey] && landingMap[activeLandingAssetKey] !== 'auto'
+                    ? `${landingMap[activeLandingAssetKey]} (Custom)`
+                    : 'Auto (Calculated from run history)'}
+                </b>
+              </span>
+            </div>
+
+            <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+              <select
+                aria-label="Select Asset for Landing Time"
+                value={activeLandingAssetKey}
+                onChange={(e) => {
+                  const nextKey = e.target.value;
+                  setSelectedLandingAsset(nextKey);
+                  const existing = landingMap[nextKey];
+                  if (existing && existing !== 'auto') {
+                    setCustomLandingClock(existing);
+                  }
+                }}
+                style={css(
+                  "height:32px;padding:0 10px;border-radius:7px;border:1px solid var(--border);background:var(--card,#fff);color:var(--fg);font-size:12px;font-family:'Geist Mono',monospace;min-width:220px;",
+                )}
+              >
+                {allConfigurableItems.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name} ({item.type})
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="time"
+                aria-label="Custom Expected Landing Time"
+                value={customLandingClock}
+                onChange={(e) => setCustomLandingClock(e.target.value)}
+                style={css(
+                  "height:32px;padding:0 10px;border-radius:7px;border:1px solid var(--border);background:var(--card,#fff);color:var(--fg);font-size:12px;font-family:'Geist Mono',monospace;",
+                )}
+              />
+
+              <button
+                type="button"
+                disabled={landingSaving}
+                onClick={() => {
+                  void setExpectedLandingTime(activeLandingAssetKey, customLandingClock);
+                  setLandingSavedNotice(
+                    `✓ Set ${activeLandingAssetKey} expected landing to ${customLandingClock}`,
+                  );
+                }}
+                style={css(
+                  'height:32px;padding:0 12px;border-radius:7px;border:1px solid var(--accent,#4f46e5);background:var(--accent,#4f46e5);color:#fff;font-size:12px;font-weight:600;cursor:pointer;',
+                )}
+              >
+                Save Custom Landing ({customLandingClock})
+              </button>
+
+              <button
+                type="button"
+                disabled={landingSaving}
+                onClick={() => {
+                  void setExpectedLandingTime(activeLandingAssetKey, 'auto');
+                  setLandingSavedNotice(
+                    `✓ Reset ${activeLandingAssetKey} to Auto Average Landing Time`,
+                  );
+                }}
+                style={css(
+                  'height:32px;padding:0 12px;border-radius:7px;border:1px solid var(--border);background:var(--card,#fff);color:var(--fg);font-size:12px;font-weight:600;cursor:pointer;',
+                )}
+              >
+                Use Auto Average
+              </button>
+            </div>
+
+            {customOverrides.length > 0 && (
+              <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:4px;')}>
+                <span style={css('font-size:11px;color:var(--fgm);font-weight:600;')}>
+                  Active overrides:
+                </span>
+                {customOverrides.map(([assetName, targetClock]) => (
+                  <span
+                    key={assetName}
+                    style={css(
+                      "display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:var(--card,#fff);border:1px solid var(--border);font-size:11px;font-family:'Geist Mono',monospace;color:var(--fg);",
+                    )}
+                  >
+                    <span>
+                      {assetName} &rarr; <b>{targetClock}</b>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void setExpectedLandingTime(assetName, 'auto')}
+                      style={css(
+                        'border:none;background:transparent;color:var(--fgm);cursor:pointer;padding:0 2px;font-size:11px;',
+                      )}
+                      title="Revert to Auto Average"
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div style={css('border-top:1px solid var(--border);padding-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;')}>
           <div>

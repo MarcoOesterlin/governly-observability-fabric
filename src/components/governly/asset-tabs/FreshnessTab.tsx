@@ -6,13 +6,18 @@ import {
   useAsset,
   useAssetFreshness,
   useAssetLineage,
+  useAssetQuality,
   useJobFailureDiagnostics,
   type JobFailureDiagnostic,
 } from '../../../data/useAsset';
 import { useAssets, useRuntimeAssets, type AssetItem } from '../../../data/useAssets';
 import {
+  evaluateExpectedLanding,
   formatSlaMinutes,
+  LANDING_TIME_PRESETS,
+  resolveRowCountDriftAndOps,
   SLA_PRESETS,
+  useExpectedLandingTimes,
   useFreshnessSlas,
 } from '../../../data/useFreshnessSla';
 import { useIncidents } from '../../../data/useIncidents';
@@ -371,9 +376,15 @@ export function FreshnessTab({
   const { rows: runtimeAssets } = useRuntimeAssets();
   const explicitLineage = useAssetLineage(assetKey);
   const { runs: liveRuns, lagPoints, lagLabels } = useAssetFreshness(assetKey);
+  const qualityChecks = useAssetQuality(assetKey);
   const jobDiagnostics = useJobFailureDiagnostics(assetKey);
   const allIncidents = useIncidents();
   const { setSlaTarget, saving } = useFreshnessSlas();
+  const {
+    landingMap,
+    setExpectedLandingTime,
+    saving: landingSaving,
+  } = useExpectedLandingTimes();
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const runs = propRuns ?? liveRuns;
   const slaMin = asset.slaMinutes ?? 60;
@@ -382,6 +393,19 @@ export function FreshnessTab({
   const slaLabel = formatSlaMinutes(slaMin);
   const midAxisLabel = formatSlaMinutes(Math.round(slaMin * 1.5));
   const topAxisLabel = formatSlaMinutes(Math.round(slaMin * 2));
+
+  const landingEval = evaluateExpectedLanding(
+    asset.id || asset.name || assetKey,
+    runs,
+    landingMap,
+  );
+  const opsDrift = resolveRowCountDriftAndOps(
+    asset.id || asset.name || assetKey,
+    asset.type,
+    asset.rowCountLabel ?? '',
+    runs,
+    qualityChecks,
+  );
 
   const combinedCatalog = Array.from(
     new Map([...dataAssets, ...runtimeAssets].map((a) => [a.name, a])).values(),
@@ -469,6 +493,63 @@ export function FreshnessTab({
                 Set as default
               </button>
             </div>
+            <div style={css('display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:8px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);')}>
+              <span style={css('font-size:11px;font-weight:600;color:var(--fgm);')}>
+                Expected Landing:
+              </span>
+              <span
+                style={css(
+                  `font-size:11.5px;font-weight:600;font-family:'Geist Mono',monospace;color:${
+                    landingEval.isLateVsExpected ? 'var(--crit,#dc2626)' : 'var(--fg,#18181b)'
+                  };`,
+                )}
+              >
+                {landingEval.expectedTime}
+              </span>
+              <span style={css('font-size:10.5px;color:var(--fgm);')}>
+                ({landingEval.sourceLabel})
+              </span>
+              <select
+                aria-label="Expected Landing Time Override"
+                disabled={landingSaving}
+                value={
+                  landingMap[asset.id || assetKey] &&
+                  landingMap[asset.id || assetKey] !== 'auto'
+                    ? landingMap[asset.id || assetKey]
+                    : 'auto'
+                }
+                onChange={(e) => {
+                  const val = e.target.value;
+                  void setExpectedLandingTime(asset.id || assetKey, val);
+                  setSavedNotice(
+                    val === 'auto'
+                      ? `Expected landing set to Auto Average (${landingEval.avgLandingTime ?? '06:00'})`
+                      : `Expected landing time set to ${val} for ${asset.name}`,
+                  );
+                  setTimeout(() => setSavedNotice(null), 3000);
+                }}
+                style={css(
+                  "height:24px;padding:0 6px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11px;font-weight:600;font-family:'Geist Mono',monospace;cursor:pointer;",
+                )}
+              >
+                {LANDING_TIME_PRESETS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.value === 'auto' && landingEval.avgLandingTime
+                      ? `Auto Avg (${landingEval.avgLandingTime})`
+                      : p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <span
+              style={
+                landingEval.isLateVsExpected
+                  ? badge('var(--crit)', 'var(--critb)')
+                  : badge('var(--ok)', 'var(--okb)')
+              }
+            >
+              {landingEval.statusLabel}
+            </span>
             {savedNotice && (
               <span style={css('font-size:11px;font-weight:600;color:var(--ok);')}>
                 {savedNotice}
@@ -508,6 +589,98 @@ export function FreshnessTab({
           </div>
         )}
       </div>
+
+      <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);padding:16px 18px;display:flex;flex-direction:column;gap:14px;')}>
+        <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;')}>
+          <div style={css('display:flex;align-items:center;gap:8px;')}>
+            <i className="ph ph-arrows-left-right" style={css('font-size:16px;color:var(--accent,#4f46e5);')} aria-hidden="true" />
+            <span style={css('font-size:14px;font-weight:600;color:var(--fg);')}>
+              Row Count Drift (Start vs. After Processing) &amp; Operational Metadata
+            </span>
+          </div>
+          <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+            <span
+              style={css(
+                "font-size:11px;font-family:'Geist Mono',monospace;padding:2px 8px;border-radius:6px;background:var(--card2,#f4f4f6);color:var(--fgm);",
+              )}
+            >
+              {opsDrift.operation} · {opsDrift.commitVersionLabel}
+            </span>
+            <span
+              style={
+                opsDrift.driftStatus === 'breach'
+                  ? badge('var(--crit)', 'var(--critb)')
+                  : opsDrift.driftStatus === 'warn'
+                    ? badge('var(--warn)', 'var(--warnb)')
+                    : badge('var(--ok)', 'var(--okb)')
+              }
+            >
+              Drift {opsDrift.driftPctLabel} ({opsDrift.netDeltaLabel})
+            </span>
+          </div>
+        </div>
+
+        <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;')}>
+          <div style={css('padding:11px 13px;border-radius:8px;background:var(--card2,#fafafa);border:1px solid var(--border,#e7e7ea);')}>
+            <div style={css('font-size:11px;font-weight:600;color:var(--fgm);text-transform:uppercase;letter-spacing:0.04em;')}>
+              Rows at Start (Before Processing)
+            </div>
+            <div style={css("font-size:15px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);margin-top:4px;")}>
+              {opsDrift.rowsBeforeLabel}
+            </div>
+            <div style={css('font-size:11px;color:var(--fgm);margin-top:2px;')}>
+              Prior Delta version baseline
+            </div>
+          </div>
+
+          <div style={css('padding:11px 13px;border-radius:8px;background:var(--card2,#fafafa);border:1px solid var(--border,#e7e7ea);')}>
+            <div style={css('font-size:11px;font-weight:600;color:var(--fgm);text-transform:uppercase;letter-spacing:0.04em;')}>
+              Rows After Processing
+            </div>
+            <div style={css("font-size:15px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);margin-top:4px;")}>
+              {opsDrift.rowsAfterLabel}
+            </div>
+            <div style={css('font-size:11px;color:var(--fgm);margin-top:2px;')}>
+              Latest committed table state
+            </div>
+          </div>
+
+          <div style={css('padding:11px 13px;border-radius:8px;background:var(--card2,#fafafa);border:1px solid var(--border,#e7e7ea);')}>
+            <div style={css('font-size:11px;font-weight:600;color:var(--fgm);text-transform:uppercase;letter-spacing:0.04em;')}>
+              Net Row Count Drift
+            </div>
+            <div
+              style={css(
+                `font-size:15px;font-weight:600;font-family:'Geist Mono',monospace;color:${
+                  opsDrift.driftStatus === 'breach'
+                    ? 'var(--crit,#dc2626)'
+                    : opsDrift.driftStatus === 'warn'
+                      ? 'var(--warn,#d97706)'
+                      : 'var(--ok,#16a34a)'
+                };margin-top:4px;`,
+              )}
+            >
+              {opsDrift.driftPctLabel} ({opsDrift.netDeltaLabel})
+            </div>
+            <div style={css("font-size:11px;font-family:'Geist Mono',monospace;color:var(--fgm);margin-top:2px;")}>
+              {opsDrift.dmlSummary}
+            </div>
+          </div>
+
+          <div style={css('padding:11px 13px;border-radius:8px;background:var(--card2,#fafafa);border:1px solid var(--border,#e7e7ea);')}>
+            <div style={css('font-size:11px;font-weight:600;color:var(--fgm);text-transform:uppercase;letter-spacing:0.04em;')}>
+              Operational Metadata
+            </div>
+            <div style={css("font-size:13.5px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);margin-top:4px;")}>
+              Duration {opsDrift.executionDurationLabel} · {opsDrift.storageSizeLabel}
+            </div>
+            <div style={css('font-size:11px;color:var(--fgm);margin-top:2px;')}>
+              Expected Landing: <b>{landingEval.expectedTime}</b> ({landingEval.sourceLabel})
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
         <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);display:flex;align-items:center;justify-content:space-between;')}>
           <span style={css('font-size:14px;font-weight:600;color:var(--fg);')}>Recent refresh runs</span>

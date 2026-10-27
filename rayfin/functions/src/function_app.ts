@@ -198,7 +198,7 @@ udf.func(
       };
 
       const listRes = await fetch(
-        `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/schedules?jobType=RunNotebook`,
+        `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/RunNotebook/schedules`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       const listData = listRes.ok
@@ -208,7 +208,7 @@ udf.func(
 
       const saveRes = existingId
         ? await fetch(
-            `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/schedules/${existingId}?jobType=RunNotebook`,
+            `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/RunNotebook/schedules/${existingId}`,
             {
               method: 'PATCH',
               headers,
@@ -216,7 +216,7 @@ udf.func(
             },
           )
         : await fetch(
-            `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/schedules?jobType=RunNotebook`,
+            `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/RunNotebook/schedules`,
             {
               method: 'POST',
               headers,
@@ -249,7 +249,7 @@ udf.func(
     // Default: 'status' or 'jobs'
     const [schedRes, jobsRes, wsListRes] = await Promise.all([
       fetch(
-        `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/schedules?jobType=RunNotebook`,
+        `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/RunNotebook/schedules`,
         { headers: { Authorization: `Bearer ${token}` } },
       ),
       fetch(

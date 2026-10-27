@@ -476,17 +476,30 @@ export function useComputeConfig() {
           }
           if (localMutationSeq === seqAtStart) {
             const local = loadLocalComputeConfig();
-            saveLocalComputeConfig(
-              {
-                ...local,
-                scheduleEnabled: Boolean(res.scheduleEnabled),
-                intervalMinutes:
-                  res.intervalMinutes && res.intervalMinutes > 0
-                    ? res.intervalMinutes
-                    : local.intervalMinutes || DEFAULT_COMPUTE_CADENCE_MINUTES,
-              },
-              false,
-            );
+            if (local.scheduleEnabled && !res.scheduleEnabled) {
+              // Self-heal: user enabled schedule in Governly, ensure Fabric Cron schedule is registered
+              void client.functions.manageComputeNotebook
+                .invoke({
+                  hostWorkspaceId: hostWsId,
+                  action: 'schedule',
+                  scheduleEnabled: true,
+                  intervalMinutes:
+                    local.intervalMinutes || DEFAULT_COMPUTE_CADENCE_MINUTES,
+                })
+                .catch(() => undefined);
+            } else {
+              saveLocalComputeConfig(
+                {
+                  ...local,
+                  scheduleEnabled: Boolean(res.scheduleEnabled),
+                  intervalMinutes:
+                    res.intervalMinutes && res.intervalMinutes > 0
+                      ? res.intervalMinutes
+                      : local.intervalMinutes || DEFAULT_COMPUTE_CADENCE_MINUTES,
+                },
+                false,
+              );
+            }
           }
         }
       } catch {

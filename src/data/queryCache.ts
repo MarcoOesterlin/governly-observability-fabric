@@ -9,8 +9,39 @@ interface CacheEntry<T> {
 const memoryCache = new Map<string, CacheEntry<unknown>>();
 const inflightMap = new Map<string, Promise<unknown>>();
 const keyListeners = new Map<string, Set<() => void>>();
+const pendingNotifyKeys = new Set<string>();
+let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 
-const SESSION_PREFIX = "governly:qcache:v2:";
+const SESSION_PREFIX = "governly:qcache:v3:";
+
+function flushNotifications(): void {
+  if (coalesceTimer !== null) {
+    clearTimeout(coalesceTimer);
+    coalesceTimer = null;
+  }
+  if (pendingNotifyKeys.size === 0) return;
+  const keys = Array.from(pendingNotifyKeys);
+  pendingNotifyKeys.clear();
+  for (const k of keys) {
+    const subs = keyListeners.get(k);
+    if (subs) {
+      subs.forEach((fn) => fn());
+    }
+  }
+}
+
+function scheduleNotify(key: string, immediate = false): void {
+  pendingNotifyKeys.add(key);
+  if (immediate || inflightMap.size === 0) {
+    flushNotifications();
+    return;
+  }
+  if (coalesceTimer === null) {
+    coalesceTimer = setTimeout(() => {
+      flushNotifications();
+    }, 650);
+  }
+}
 
 function readEntry<T>(key: string): CacheEntry<T> | undefined {
   const mem = memoryCache.get(key) as CacheEntry<T> | undefined;
@@ -34,7 +65,12 @@ function readEntry<T>(key: string): CacheEntry<T> | undefined {
   return undefined;
 }
 
-function writeEntry<T>(key: string, value: T, tick: number): void {
+function writeEntry<T>(
+  key: string,
+  value: T,
+  tick: number,
+  immediate = false
+): void {
   const entry: CacheEntry<T> = { value, updatedAt: Date.now(), tick };
   memoryCache.set(key, entry);
   if (typeof window !== "undefined") {
@@ -45,10 +81,7 @@ function writeEntry<T>(key: string, value: T, tick: number): void {
       // ignore quota errors
     }
   }
-  const subs = keyListeners.get(key);
-  if (subs) {
-    subs.forEach((fn) => fn());
-  }
+  scheduleNotify(key, immediate);
 }
 
 export function invalidateQueryCache(prefix?: string): void {
@@ -71,7 +104,7 @@ export function updateQueryCache<T>(
       const cur = memoryCache.get(key) as CacheEntry<T> | undefined;
       if (cur) {
         const nextVal = updater(cur.value);
-        writeEntry(key, nextVal, cur.tick);
+        writeEntry(key, nextVal, cur.tick, true);
       }
     }
   }
@@ -138,6 +171,9 @@ export function useCachedQuery<T>(
         })
         .finally(() => {
           inflightMap.delete(key);
+          if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
+            flushNotifications();
+          }
         });
       inflightMap.set(key, pending);
     }

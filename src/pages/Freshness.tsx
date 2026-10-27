@@ -9,7 +9,11 @@ import { Box } from '../components/governly/Box';
 import { badge, statusColor } from '../components/governly/primitives';
 import { useJobFailureDiagnostics } from '../data/useAsset';
 import { useAssets, useRuntimeAssets } from '../data/useAssets';
-import { formatSlaMinutes } from '../data/useFreshnessSla';
+import {
+  evaluateExpectedLanding,
+  formatSlaMinutes,
+  useExpectedLandingTimes,
+} from '../data/useFreshnessSla';
 import { useIncidents } from '../data/useIncidents';
 import { css } from '../lib/css';
 
@@ -19,7 +23,8 @@ type RuntimeStatusFilter = 'all' | 'breach' | 'healthy';
 export function Freshness() {
   const navigate = useNavigate();
   const { allRows: dataAssets } = useAssets({ includeRuntime: true });
-  const { rows: assets } = useRuntimeAssets();
+  const { rows: assets, liveJobs } = useRuntimeAssets();
+  const { landingMap } = useExpectedLandingTimes();
   const combinedCatalog = Array.from(
     new Map([...dataAssets, ...assets].map((a) => [a.name, a])).values(),
   );
@@ -360,16 +365,25 @@ export function Freshness() {
             </div>
           </div>
         </div>
-        <div style={css('display:grid;grid-template-columns:2.2fr 1fr 1fr 1fr 90px;gap:8px;padding:9px 18px;font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fgs,#a1a1aa);border-bottom:1px solid var(--border,#e7e7ea);')}>
+        <div style={css('display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1.1fr 90px;gap:8px;padding:9px 18px;font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fgs,#a1a1aa);border-bottom:1px solid var(--border,#e7e7ea);')}>
           <span>Runtime Item / Asset</span>
           <span>Type</span>
           <span>Workspace / Domain</span>
           <span>Latest Run / Freshness</span>
+          <span>Expected Landing</span>
           <span style={css('text-align:right;')}>SLA Target</span>
         </div>
         {filteredRuntime.map((a) => {
           const isFailed = a.fresh.toLowerCase().includes('fail');
           const freshColor = a.late || isFailed ? 'color:var(--crit);' : 'color:var(--fgm);';
+          const matchedJob = liveJobs.find(
+            (j) => j.asset_key === a.name || j.name === a.name,
+          );
+          const landingEval = evaluateExpectedLanding(
+            a.name,
+            matchedJob?.runs ?? [],
+            landingMap,
+          );
           return (
             <Box
               key={a.id}
@@ -386,7 +400,7 @@ export function Freshness() {
                   navigate(`/assets/${a.name}`);
                 }
               }}
-              style="display:grid;grid-template-columns:2.2fr 1fr 1fr 1fr 90px;gap:8px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);cursor:pointer;"
+              style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1.1fr 90px;gap:8px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);cursor:pointer;"
               hover="background:var(--card2)"
             >
               <div style={css('display:flex;align-items:center;gap:11px;min-width:0;')}>
@@ -402,6 +416,18 @@ export function Freshness() {
               <div style={css(`display:flex;align-items:center;gap:6px;font-size:12.5px;${freshColor}`)}>
                 <span style={css(`width:7px;height:7px;border-radius:99px;background:${statusColor(a.status)};flex:0 0 auto;`)} />
                 <span style={css(freshColor)}>{a.fresh}</span>
+              </div>
+              <div style={css("display:flex;align-items:center;gap:6px;font-size:12px;font-family:'Geist Mono',monospace;")}>
+                <span style={css('font-weight:600;color:var(--fg);')}>
+                  {landingEval.expectedTime}
+                </span>
+                <span style={css('font-size:10.5px;color:var(--fgm);')}>
+                  {landingEval.mode === 'custom'
+                    ? '(Custom)'
+                    : landingEval.runCount >= 2
+                      ? `(Avg · ${landingEval.runCount}r)`
+                      : '(Auto)'}
+                </span>
               </div>
               <span style={css("font-size:12px;font-family:'Geist Mono Variable','Geist Mono',monospace;color:var(--fgm);text-align:right;")}>
                 {formatSlaMinutes(a.slaMinutes ?? 1440)}

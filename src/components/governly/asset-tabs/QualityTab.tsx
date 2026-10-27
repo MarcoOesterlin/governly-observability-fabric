@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { css } from '../../../lib/css';
 import { badge } from '../primitives';
 import {
+  useAsset,
   useAssetFailedRows,
+  useAssetFreshness,
   useAssetQuality,
   useAssetSchema,
   type FailedRowItem,
 } from '../../../data/useAsset';
+import { resolveRowCountDriftAndOps } from '../../../data/useFreshnessSla';
 import {
   DATA_QUALITY_DIMENSIONS,
   isQualityRuleDeleted,
@@ -49,6 +52,8 @@ export function QualityTab({
   onEditRule?: (ruleId?: string) => void;
 }) {
   const isAllTables = !assetKey || assetKey === '*';
+  const asset = useAsset(isAllTables ? 'sales.fact_orders' : assetKey);
+  const { runs: freshnessRuns } = useAssetFreshness(isAllTables ? 'sales.fact_orders' : assetKey);
   const { columns: schemaCols } = useAssetSchema(isAllTables ? undefined : assetKey);
   const {
     rules: userRules,
@@ -58,6 +63,68 @@ export function QualityTab({
     deleteRule,
   } = useQualityRules(isAllTables ? undefined : assetKey);
   const livePubResults = useAssetQuality(isAllTables ? undefined : assetKey);
+
+  const opsDrift = resolveRowCountDriftAndOps(
+    asset.name || assetKey,
+    asset.type,
+    asset.rowCountLabel ?? '',
+    freshnessRuns,
+    livePubResults.map((r) => ({
+      name: r.name,
+      def: r.detail,
+      observed: r.value,
+      res: r.result,
+    })),
+  );
+
+  // Build daily key-column null rate cards from schema columns + published null checks
+  const candidateKeyCols = schemaCols.filter(
+    (c) =>
+      c.flag === 'PK' ||
+      c.flag === 'FK' ||
+      /(_id|_key|_code|_date|amount|status|email|name|customer|order)/i.test(c.col),
+  );
+  const keyColumnsToCheck = (
+    candidateKeyCols.length > 0 ? candidateKeyCols : schemaCols
+  ).slice(0, 6);
+
+  const keyColumnNullRates = keyColumnsToCheck.map((colObj) => {
+    const colLower = colObj.col.toLowerCase();
+    const matchedCheck = livePubResults.find((pr) => {
+      const n = pr.name.toLowerCase();
+      const d = pr.detail.toLowerCase();
+      return (
+        (n.includes('null') || n.includes('completeness')) &&
+        (n.includes(colLower) || d.includes(colLower))
+      );
+    });
+    let pctVal = colObj.flag === 'PK' ? 0.0 : 0.0;
+    if (matchedCheck?.value) {
+      const m = matchedCheck.value.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+      if (m) {
+        const parsed = parseFloat(m[1]);
+        if (!Number.isNaN(parsed)) {
+          // If it's a pass rate like 99.8%, convert to null rate 0.2%; if it's already a null rate like 0.14%, keep it
+          pctVal = parsed > 50 ? Math.max(0, 100 - parsed) : parsed;
+        }
+      }
+    }
+    const status: 'pass' | 'warn' | 'fail' =
+      matchedCheck?.result === 'fail' || pctVal > 2.0
+        ? 'fail'
+        : pctVal > 0.5
+          ? 'warn'
+          : 'pass';
+    return {
+      col: colObj.col,
+      type: colObj.type,
+      flag: colObj.flag,
+      nullPct: pctVal,
+      nullPctLabel: `${pctVal.toFixed(2)}% null`,
+      nonNullPctLabel: `${(100 - pctVal).toFixed(2)}% populated`,
+      status,
+    };
+  });
 
   const [showStudio, setShowStudio] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
@@ -93,11 +160,17 @@ export function QualityTab({
           };
         })
       : !isAllTables
-      ? livePubResults.map((pr) => ({
-          ...pr,
-          id: `pub-${pr.name}`,
-          editable: false,
-        }))
+      ? livePubResults
+          .filter(
+            (pr) =>
+              !pr.name.toLowerCase().startsWith('row count drift') &&
+              !pr.name.toLowerCase().startsWith('key null rate'),
+          )
+          .map((pr) => ({
+            ...pr,
+            id: `pub-${pr.name}`,
+            editable: false,
+          }))
       : [];
 
   const displayRules = rawDisplayRules.filter(
@@ -139,6 +212,77 @@ export function QualityTab({
 
   return (
     <div style={css('display:flex;flex-direction:column;gap:18px;')}>
+      {showRulesCard && !isAllTables && (
+        <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);padding:16px 18px;display:flex;flex-direction:column;gap:14px;')}>
+          <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;')}>
+            <div style={css('display:flex;align-items:center;gap:8px;')}>
+              <i className="ph ph-pulse" style={css('font-size:17px;color:var(--accent,#4f46e5);')} aria-hidden="true" />
+              <span style={css('font-size:14px;font-weight:600;color:var(--fg);')}>
+                Daily Check · Row Count Drift &amp; Key-Column Null Rates ({asset.name || assetKey})
+              </span>
+            </div>
+            <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+              <span style={css("font-size:11px;font-family:'Geist Mono',monospace;padding:2px 8px;border-radius:6px;background:var(--card2,#f4f4f6);color:var(--fgm);")}>
+                {opsDrift.operation} · Start {opsDrift.rowsBeforeLabel} &rarr; After {opsDrift.rowsAfterLabel}
+              </span>
+              <span
+                style={
+                  opsDrift.driftStatus === 'breach'
+                    ? badge('var(--crit)', 'var(--critb)')
+                    : opsDrift.driftStatus === 'warn'
+                      ? badge('var(--warn)', 'var(--warnb)')
+                      : badge('var(--ok)', 'var(--okb)')
+                }
+              >
+                Row Drift: {opsDrift.driftPctLabel} ({opsDrift.netDeltaLabel})
+              </span>
+            </div>
+          </div>
+
+          <div style={css('display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;')}>
+            {keyColumnNullRates.map((kc) => (
+              <div
+                key={kc.col}
+                style={css(
+                  `padding:10px 12px;border-radius:8px;background:var(--card2,#fafafa);border:1px solid ${
+                    kc.status === 'fail'
+                      ? 'var(--crit,#dc2626)'
+                      : kc.status === 'warn'
+                        ? 'var(--warn,#f59e0b)'
+                        : 'var(--border,#e7e7ea)'
+                  };display:flex;flex-direction:column;gap:5px;`,
+                )}
+              >
+                <div style={css('display:flex;align-items:center;justify-content:space-between;gap:6px;')}>
+                  <span style={css("font-size:12.5px;font-weight:600;font-family:'Geist Mono',monospace;color:var(--fg);display:inline-flex;align-items:center;gap:6px;")}>
+                    {kc.col}
+                    {kc.flag && (
+                      <span style={css('font-size:9.5px;padding:1px 5px;border-radius:4px;background:var(--card,#fff);border:1px solid var(--border);color:var(--fgm);')}>
+                        {kc.flag}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    style={
+                      kc.status === 'fail'
+                        ? badge('var(--crit)', 'var(--critb)')
+                        : kc.status === 'warn'
+                          ? badge('var(--warn)', 'var(--warnb)')
+                          : badge('var(--ok)', 'var(--okb)')
+                    }
+                  >
+                    {kc.nullPctLabel}
+                  </span>
+                </div>
+                <div style={css('display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--fgm);')}>
+                  <span>{kc.type}</span>
+                  <span style={css("font-family:'Geist Mono',monospace;")}>{kc.nonNullPctLabel}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {showStudio && (
         <QualityRuleStudio
           assetKey={assetKey}
