@@ -244,8 +244,8 @@ export function Sidebar({
                     )}
                   >
                     {isAllDomains
-                      ? `All domains (${allRows.length})`
-                      : `${selectedDomain} (${activeDomainCount})`}
+                      ? `All domains (${domains.length})`
+                      : `${selectedDomain} (${activeDomainCount} asset${activeDomainCount === 1 ? '' : 's'})`}
                   </div>
                 </div>
                 <div

@@ -1,6 +1,4 @@
 import { useNavigate } from 'react-router-dom';
-import { useWorkspace } from '../../app/WorkspaceProvider';
-import { useAssets } from '../../data/useAssets';
 import { Box } from './Box';
 import { css } from '../../lib/css';
 import { qColor, statusColor } from './primitives';
@@ -8,40 +6,11 @@ import type { AssetFixture } from '../../fixtures/types';
 
 export function AssetsCard({ assets, totalCount = 169 }: { assets: AssetFixture[]; totalCount?: number }) {
   const navigate = useNavigate();
-  const { selectedDomain, setSelectedDomain } = useWorkspace();
-  const { domains: discoveredDomains } = useAssets();
-  const domainChoices = Array.from(
-    new Set([
-      ...discoveredDomains,
-      ...assets.map((a) => a.domain).filter(Boolean),
-    ])
-  );
 
   return (
     <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
       <div style={css('padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;border-bottom:1px solid var(--border,#e7e7ea);')}>
-        <div style={css('display:flex;align-items:center;gap:10px;flex-wrap:wrap;')}>
-          <div style={css('font-size:14px;font-weight:600;color:var(--fg,#18181b);')}>Monitored assets</div>
-          {domainChoices.length > 0 && (
-            <div style={css('display:flex;align-items:center;gap:5px;flex-wrap:wrap;')}>
-              {(['All', ...domainChoices] as string[]).map((dom) => {
-                const active = selectedDomain === dom;
-                return (
-                  <button
-                    key={dom}
-                    type="button"
-                    onClick={() => setSelectedDomain(dom)}
-                    style={css(
-                      `height:24px;padding:0 9px;border-radius:99px;font-size:11.5px;font-weight:${active ? 600 : 500};border:1px solid ${active ? 'var(--fg,#18181b)' : 'var(--border,#e7e7ea)'};background:${active ? 'var(--fg,#18181b)' : 'var(--card2,#f4f4f5)'};color:${active ? 'var(--bg,#fff)' : 'var(--fgm,#52525b)'};cursor:pointer;`
-                    )}
-                  >
-                    {dom}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <div style={css('font-size:14px;font-weight:600;color:var(--fg,#18181b);')}>Monitored assets</div>
         <div
           role="link"
           tabIndex={0}
