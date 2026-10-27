@@ -1,18 +1,20 @@
 import { useNavigate } from 'react-router-dom';
+import { isActiveIncidentStatus } from '../../data/mappers';
 import { Box } from './Box';
 import { css } from '../../lib/css';
 import { dot, pill, sevPair, statusPair } from './primitives';
 import type { IncidentFixture } from '../../fixtures/types';
 
-export function IncidentsCard({ incidents, openCount = 0 }: { incidents: IncidentFixture[]; openCount?: number }) {
+export function IncidentsCard({ incidents, openCount }: { incidents: IncidentFixture[]; openCount?: number }) {
   const navigate = useNavigate();
-  const activeIncidents = incidents.filter((i) => i.status !== 'Resolved');
+  const activeIncidents = incidents.filter((i) => isActiveIncidentStatus(i.status));
+  const badgeCount = openCount !== undefined ? openCount : activeIncidents.length;
 
   return (
     <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
       <div style={css('padding:15px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border,#e7e7ea);')}>
         <div style={css('font-size:14px;font-weight:600;color:var(--fg,#18181b);')}>Active incidents</div>
-        <span style={pill('var(--crit)', 'var(--critb)')}>{openCount} open</span>
+        <span style={pill('var(--crit)', 'var(--critb)')}>{badgeCount} open</span>
       </div>
       {activeIncidents.length === 0 ? (
         <div style={css('padding:18px;font-size:12.5px;color:var(--fgm,#52525b);')}>

@@ -115,11 +115,32 @@ export interface PubIncidentRow {
   assignee?: string;
 }
 
+export function normalizeIncidentStatus(raw?: unknown): IncidentStatus {
+  const s = String(raw ?? "Open").trim().toLowerCase();
+  if (s === "resolved" || s === "done" || s === "closed") return "Resolved";
+  if (s === "in progress" || s === "in_progress") return "In progress";
+  if (s === "blocked") return "Blocked";
+  if (s === "investigating") return "Investigating";
+  if (s === "acknowledged") return "Acknowledged";
+  return "Open";
+}
+
+export function isActiveIncidentStatus(status?: unknown): boolean {
+  const norm = normalizeIncidentStatus(status);
+  return (
+    norm === "Open" ||
+    norm === "In progress" ||
+    norm === "Blocked" ||
+    norm === "Investigating" ||
+    norm === "Acknowledged"
+  );
+}
+
 export function toIncidentFixture(
   row: PubIncidentRow,
   state?: { status?: IncidentStatus | string }
 ): IncidentFixture {
-  const status = ((state?.status ?? row.detected_status ?? "Open") as IncidentStatus) || "Open";
+  const status = normalizeIncidentStatus(state?.status ?? row.detected_status ?? "Open");
   const assetKey = row.asset_key ?? "finance.gl_transactions";
   const rawSev = String(row.severity ?? "Medium").toLowerCase();
   const sev: SeverityLevel =

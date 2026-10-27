@@ -8,6 +8,7 @@ import type {
   KpiFixture,
   SchemaChangeFixture,
 } from '../fixtures/types';
+import { isActiveIncidentStatus } from '../data/mappers';
 import { useOverviewKpis, useHealthStrip, useSchemaChanges } from '../data/useOverview';
 import { useAssets } from '../data/useAssets';
 import { useIncidents } from '../data/useIncidents';
@@ -59,8 +60,8 @@ export function Overview({
   const warningCount = propWarningCount ?? liveStrip.distribution.warning;
   const criticalCount = propCriticalCount ?? liveStrip.distribution.critical;
   const assets = propAssets ?? liveAssets;
-  const activeIncidents = (propIncidentsTop ?? liveIncidents).filter(
-    (i) => i.status !== 'Resolved',
+  const activeIncidents = (propIncidentsTop ?? liveIncidents).filter((i) =>
+    isActiveIncidentStatus(i.status),
   );
   const incidentsTop = activeIncidents.slice(0, 4);
   const openIncidentCount = activeIncidents.length;

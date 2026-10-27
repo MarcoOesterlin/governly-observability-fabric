@@ -8,7 +8,7 @@ import type {
   TimelineFixture,
 } from "../fixtures/types";
 import { client } from "./client";
-import { toIncidentFixture } from "./mappers";
+import { normalizeIncidentStatus, toIncidentFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { IncidentFilter } from "./queryKeys";
 import {
@@ -46,6 +46,26 @@ function buildLiveTimeline(status: IncidentFixture["status"]): TimelineFixture[]
 
 const EMPTY_INCIDENTS: IncidentFixture[] = [];
 const EMPTY_CASES: CaseFixture[] = [];
+
+function formatIncidentAge(detectedAt: unknown): string {
+  if (!detectedAt) return "Recently";
+  const d =
+    detectedAt instanceof Date ? detectedAt : new Date(String(detectedAt));
+  if (!Number.isNaN(d.getTime())) {
+    const diffMins = Math.max(
+      0,
+      Math.round((Date.now() - d.getTime()) / 60000)
+    );
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const hrs = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    if (hrs < 24) return mins > 0 ? `${hrs}h ${mins}m ago` : `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  }
+  return "Recently";
+}
 
 export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
   const { workspaceId, refreshTick } = useWorkspace();
@@ -164,9 +184,7 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
             initials,
             assignee: assigneeName,
             detected_status: r.auto_resolved_at ? "Resolved" : "Open",
-            detected_label: r.detected_at
-              ? String(r.detected_at).slice(11, 16) || "Recently"
-              : "Recently",
+            detected_label: formatIncidentAge(r.detected_at),
           },
           st
         );
@@ -174,9 +192,21 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
           isCaseLinkedToIncident(c, baseInc)
         );
         const anyCaseDone = linkedCases.some((c) => c.status === "Done");
-        const effectiveStatus: IncidentFixture["status"] =
-          latestIncStatuses[baseInc.id] ??
-          (anyCaseDone ? "Resolved" : baseInc.status);
+        const anyCaseBlocked = linkedCases.some((c) => c.status === "Blocked");
+        const anyCaseInProgress = linkedCases.some(
+          (c) => c.status === "In progress"
+        );
+        const caseDerivedStatus: IncidentFixture["status"] | undefined =
+          anyCaseDone
+            ? "Resolved"
+            : anyCaseBlocked
+              ? "Blocked"
+              : anyCaseInProgress
+                ? "In progress"
+                : undefined;
+        const effectiveStatus: IncidentFixture["status"] = normalizeIncidentStatus(
+          latestIncStatuses[baseInc.id] ?? caseDerivedStatus ?? baseInc.status
+        );
         return {
           ...baseInc,
           status: effectiveStatus,
@@ -189,14 +219,13 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
 
   return rows.map((inc) => {
     if (localIncMap[inc.id]) {
-      return { ...inc, status: localIncMap[inc.id] };
+      return { ...inc, status: normalizeIncidentStatus(localIncMap[inc.id]) };
     }
     for (const [caseKey, caseStatus] of Object.entries(localCaseMap)) {
-      if (
-        caseStatus === "Done" &&
-        isCaseLinkedToIncident({ key: caseKey }, inc)
-      ) {
-        return { ...inc, status: "Resolved" };
+      if (isCaseLinkedToIncident({ key: caseKey }, inc)) {
+        if (caseStatus === "Done") return { ...inc, status: "Resolved" };
+        if (caseStatus === "Blocked") return { ...inc, status: "Blocked" };
+        if (caseStatus === "In progress") return { ...inc, status: "In progress" };
       }
     }
     return inc;

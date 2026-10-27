@@ -21,7 +21,9 @@ import { css } from '../lib/css';
 const TIMELINE_ORDER: Record<IncidentFixture['status'], number> = {
   Open: 0,
   Acknowledged: 1,
+  Blocked: 1,
   Investigating: 2,
+  'In progress': 2,
   Resolved: 3,
 };
 

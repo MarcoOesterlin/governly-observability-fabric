@@ -30,6 +30,8 @@ export const sevPair = (s: string): Pair => SEV[s] ?? SEV.Low;
 
 const STATUS: Record<string, Pair> = {
   Open: ['var(--crit)', 'var(--critb)'],
+  'In progress': ['var(--info)', 'var(--infob)'],
+  Blocked: ['var(--warn)', 'var(--warnb)'],
   Investigating: ['var(--info)', 'var(--infob)'],
   Acknowledged: ['var(--warn)', 'var(--warnb)'],
   Resolved: ['var(--ok)', 'var(--okb)'],

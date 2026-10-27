@@ -1,6 +1,12 @@
 export type HealthStatus = "healthy" | "warning" | "critical";
 export type SeverityLevel = "Critical" | "High" | "Medium" | "Low";
-export type IncidentStatus = "Open" | "Acknowledged" | "Investigating" | "Resolved";
+export type IncidentStatus =
+  | "Open"
+  | "In progress"
+  | "Blocked"
+  | "Acknowledged"
+  | "Investigating"
+  | "Resolved";
 export type CaseStatus = "Open" | "In progress" | "Blocked" | "Done";
 export type TimeRange = "24h" | "7d" | "30d";
 
@@ -31,7 +37,7 @@ export type IncidentFixture = {
   title: string;
   asset: string;
   sev: "Critical" | "High" | "Medium" | "Low";
-  status: "Open" | "Acknowledged" | "Investigating" | "Resolved";
+  status: IncidentStatus;
   age: string;
   initials: string;
   monitor: string;
