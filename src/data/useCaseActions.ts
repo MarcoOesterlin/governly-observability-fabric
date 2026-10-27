@@ -28,7 +28,9 @@ export function saveLocalCaseStatus(
 ): void {
   if (typeof window === "undefined" || !caseKey) return;
   try {
-    const next = { ...loadLocalCaseStatuses(), [caseKey]: status };
+    const cur = loadLocalCaseStatuses();
+    if (cur[caseKey] === status) return;
+    const next = { ...cur, [caseKey]: status };
     window.localStorage.setItem(CASE_STATUS_STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent(CASE_STATUS_EVENT));
   } catch {
@@ -56,7 +58,9 @@ export function saveLocalIncidentStatus(
 ): void {
   if (typeof window === "undefined" || !incidentKey) return;
   try {
-    const next = { ...loadLocalIncidentStatuses(), [incidentKey]: status };
+    const cur = loadLocalIncidentStatuses();
+    if (cur[incidentKey] === status) return;
+    const next = { ...cur, [incidentKey]: status };
     window.localStorage.setItem(INCIDENT_STATUS_STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new CustomEvent(INCIDENT_STATUS_EVENT));
   } catch {

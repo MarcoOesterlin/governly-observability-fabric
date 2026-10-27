@@ -68,7 +68,10 @@ export function loadCachedRuntimeJobs(): LiveRuntimeJobItem[] {
 export function saveCachedRuntimeJobs(items: LiveRuntimeJobItem[]): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(LIVE_RUNTIME_JOBS_STORAGE_KEY, JSON.stringify(items));
+    const nextRaw = JSON.stringify(items);
+    const prevRaw = window.localStorage.getItem(LIVE_RUNTIME_JOBS_STORAGE_KEY);
+    if (prevRaw === nextRaw) return;
+    window.localStorage.setItem(LIVE_RUNTIME_JOBS_STORAGE_KEY, nextRaw);
     window.dispatchEvent(new CustomEvent(LIVE_RUNTIME_JOBS_EVENT));
   } catch {
     // ignore storage errors
@@ -91,7 +94,10 @@ function saveSyncedExcludedIds(ids: string[]): void {
   if (typeof window === 'undefined') return;
   try {
     const normalized = Array.from(new Set(ids.map(String))).sort();
-    window.localStorage.setItem(SYNCED_EXCLUDED_STORAGE_KEY, JSON.stringify(normalized));
+    const nextRaw = JSON.stringify(normalized);
+    const prevRaw = window.localStorage.getItem(SYNCED_EXCLUDED_STORAGE_KEY);
+    if (prevRaw === nextRaw) return;
+    window.localStorage.setItem(SYNCED_EXCLUDED_STORAGE_KEY, nextRaw);
     window.dispatchEvent(new CustomEvent(COMPUTE_CONFIG_EVENT));
   } catch {
     // ignore
@@ -191,7 +197,10 @@ export function saveLocalComputeConfig(next: ComputeConfigState, isUserAction = 
     updatedAt: isUserAction ? Date.now() : next.updatedAt || 0,
   };
   try {
-    window.localStorage.setItem(COMPUTE_CONFIG_STORAGE_KEY, JSON.stringify(normalized));
+    const nextRaw = JSON.stringify(normalized);
+    const prevRaw = window.localStorage.getItem(COMPUTE_CONFIG_STORAGE_KEY);
+    if (prevRaw === nextRaw && !isUserAction) return;
+    window.localStorage.setItem(COMPUTE_CONFIG_STORAGE_KEY, nextRaw);
     window.dispatchEvent(new CustomEvent(COMPUTE_CONFIG_EVENT));
   } catch {
     // ignore storage errors
@@ -247,8 +256,12 @@ export function saveCachedAllWorkspaces(
   );
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.setItem(ALL_WORKSPACES_STORAGE_KEY, JSON.stringify(merged));
-      window.dispatchEvent(new CustomEvent(ALL_WORKSPACES_EVENT));
+      const nextRaw = JSON.stringify(merged);
+      const prevRaw = window.localStorage.getItem(ALL_WORKSPACES_STORAGE_KEY);
+      if (prevRaw !== nextRaw) {
+        window.localStorage.setItem(ALL_WORKSPACES_STORAGE_KEY, nextRaw);
+        window.dispatchEvent(new CustomEvent(ALL_WORKSPACES_EVENT));
+      }
     } catch {
       // ignore storage errors
     }
@@ -270,6 +283,8 @@ export function useComputeConfig() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const stewardRef = useRef(steward);
   stewardRef.current = steward;
+  const resolveWriteWsRef = useRef(resolveWriteWorkspaceId);
+  resolveWriteWsRef.current = resolveWriteWorkspaceId;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -448,7 +463,7 @@ export function useComputeConfig() {
 
     void (async () => {
       try {
-        const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
+        const hostWsId = getRuntimeWorkspaceId(resolveWriteWsRef.current());
         const res = await client.functions.manageComputeNotebook.invoke({
           hostWorkspaceId: hostWsId,
           action: 'status',
@@ -542,7 +557,7 @@ export function useComputeConfig() {
     return () => {
       cancelled = true;
     };
-  }, [resolveWriteWorkspaceId]);
+  }, []);
 
   const toggleWorkspaceIncluded = useCallback(
     async (workspaceId: string, _workspaceName: string, include: boolean) => {

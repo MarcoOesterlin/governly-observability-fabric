@@ -103,15 +103,24 @@ export function WorkspaceProvider({
     if (typeof window === "undefined") return;
     const onSync = () => {
       const cfg = loadLocalComputeConfig();
-      setExcludedIds(cfg.excludedWorkspaceIds);
-      if (cfg.hasCompletedScan || cfg.scheduleEnabled) setLocalHasScan(true);
+      setExcludedIds((prev) => {
+        const nextKey = cfg.excludedWorkspaceIds.join(",");
+        return prev.join(",") === nextKey ? prev : cfg.excludedWorkspaceIds;
+      });
+      if (cfg.hasCompletedScan || cfg.scheduleEnabled) {
+        setLocalHasScan((prev) => (prev ? prev : true));
+      }
     };
     const onAllWs = () => {
       if (initialOptions === undefined) {
         const cached = loadCachedAllWorkspaces();
         if (cached.length > 0) {
-          setLiveWorkspaces(cached);
-          setDbHasScan(true);
+          setLiveWorkspaces((prev) => {
+            const prevSig = prev.map((w) => `${w.workspace_id}:${w.display_name}`).join("|");
+            const nextSig = cached.map((w) => `${w.workspace_id}:${w.display_name}`).join("|");
+            return prevSig === nextSig ? prev : cached;
+          });
+          setDbHasScan((prev) => (prev ? prev : true));
         }
       }
     };
@@ -166,13 +175,13 @@ export function WorkspaceProvider({
     }
     return "All";
   });
-  const setSelectedDomain = (domain: string) => {
+  const setSelectedDomain = useCallback((domain: string) => {
     const next = domain || "All";
     setSelectedDomainState(next);
     if (typeof window !== "undefined") {
       window.localStorage.setItem(DOMAIN_STORAGE_KEY, next);
     }
-  };
+  }, []);
   const [casesEnabled, setCasesEnabledState] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
       const raw = window.localStorage.getItem(CASES_STORAGE_KEY);
@@ -269,15 +278,16 @@ export function WorkspaceProvider({
     }
   };
 
+  const firstActiveWorkspaceId = activeWorkspaces[0]?.workspace_id ?? "";
   const resolveWriteWorkspaceId = useCallback((): string => {
     if (workspaceId && workspaceId !== ALL_WORKSPACES_ID) {
       return workspaceId;
     }
-    if (activeWorkspaces.length > 0 && activeWorkspaces[0].workspace_id) {
-      return activeWorkspaces[0].workspace_id;
+    if (firstActiveWorkspaceId) {
+      return firstActiveWorkspaceId;
     }
     return getRuntimeWorkspaceId(workspaceId);
-  }, [workspaceId, activeWorkspaces]);
+  }, [workspaceId, firstActiveWorkspaceId]);
 
   return (
     <WorkspaceContext.Provider

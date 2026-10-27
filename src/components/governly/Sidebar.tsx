@@ -77,16 +77,17 @@ export function Sidebar({
       return [];
     }
   });
+  const liveDomainsKey = liveDomains.join('|');
   useEffect(() => {
     if (liveDomains.length > 0) {
-      setCachedDomains(liveDomains);
+      setCachedDomains((prev) => (prev.join('|') === liveDomainsKey ? prev : liveDomains));
       try {
         window.localStorage.setItem('governly:cached-domains:v1', JSON.stringify(liveDomains));
       } catch {
         // ignore
       }
     }
-  }, [liveDomains]);
+  }, [liveDomainsKey]);
   const domains = liveDomains.length > 0 ? liveDomains : cachedDomains;
   const canFilterDomains = hasCompletedScan && domains.length > 0;
   const steward = useCurrentSteward();
@@ -100,11 +101,12 @@ export function Sidebar({
   const stewardInitials = propStewardInitials ?? steward.initials ?? 'WS';
   const stewardUpn = propStewardUpn ?? steward.entra?.upn ?? '';
 
+  const domainsKey = domains.join('|');
   useEffect(() => {
     if (selectedDomain !== 'All' && domains.length > 0 && !domains.includes(selectedDomain)) {
       setSelectedDomain('All');
     }
-  }, [domains, selectedDomain, setSelectedDomain]);
+  }, [domainsKey, selectedDomain, setSelectedDomain]);
 
   useEffect(() => {
     if (!domainMenuOpen && !userMenuOpen) return;
