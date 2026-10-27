@@ -11,6 +11,8 @@ services:
     allowedRedirectUris:
       - http://localhost:5173
       - http://127.0.0.1:5173
+      - https://palm-bay-9b5226fc87-northeurope.webapp.fabricapps.net
+      - https://warm-bluff-0559ee15f4-northeurope.webapp.fabricapps.net
   data:
     enabled: true
     dialect: mssql
