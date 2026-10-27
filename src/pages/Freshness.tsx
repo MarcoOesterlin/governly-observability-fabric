@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useWorkspace } from '../app/WorkspaceProvider';
 import {
   buildFallbackJobDiagnostic,
   cleanFailureMessage,
@@ -8,14 +9,18 @@ import {
 } from '../components/governly/asset-tabs/FreshnessTab';
 import { Box } from '../components/governly/Box';
 import { badge, statusColor } from '../components/governly/primitives';
+import { useCachedQuery } from '../data/queryCache';
+import { fetchSharedPubRefreshRuns } from '../data/sharedTables';
 import { useJobFailureDiagnostics } from '../data/useAsset';
 import { useAssets, useRuntimeAssets } from '../data/useAssets';
 import {
   evaluateExpectedLanding,
   formatSlaMinutes,
+  parseLagLabelToMinutes,
   useExpectedLandingTimes,
 } from '../data/useFreshnessSla';
 import { useIncidents } from '../data/useIncidents';
+import type { RefreshRunFixture } from '../fixtures/types';
 import { css } from '../lib/css';
 
 type RuntimeTypeFilter = 'workloads' | 'notebooks' | 'pipelines' | 'tables' | 'models' | 'all';
@@ -23,9 +28,17 @@ type RuntimeStatusFilter = 'all' | 'breach' | 'healthy';
 
 export function Freshness() {
   const navigate = useNavigate();
+  const { refreshTick } = useWorkspace();
+  const inspectorRef = useRef<HTMLDivElement | null>(null);
   const { allRows: dataAssets } = useAssets({ includeRuntime: true });
   const { rows: assets, liveJobs } = useRuntimeAssets();
   const { landingMap } = useExpectedLandingTimes();
+  const publishedRefreshRuns = useCachedQuery(
+    'freshness-page:pub-refresh-runs:all',
+    () => fetchSharedPubRefreshRuns(undefined, refreshTick).catch(() => []),
+    [],
+    refreshTick,
+  );
   const combinedCatalog = Array.from(
     new Map([...dataAssets, ...assets].map((a) => [a.name, a])).values(),
   );
@@ -36,9 +49,61 @@ export function Freshness() {
   const [statusFilter, setStatusFilter] = useState<RuntimeStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedJobIds, setExpandedJobIds] = useState<Record<string, boolean>>({});
+  const [expandedRunsIds, setExpandedRunsIds] = useState<Record<string, boolean>>({});
 
   const toggleJobExpand = (jobId: string) => {
     setExpandedJobIds((prev) => ({ ...prev, [jobId]: !prev[jobId] }));
+  };
+
+  const toggleRunsExpand = (jobId: string, assetName: string) => {
+    setSelectedAssetKey(assetName);
+    setExpandedRunsIds((prev) => ({ ...prev, [jobId]: !prev[jobId] }));
+  };
+
+  const getRunsForItem = (assetName: string, slaMinutes: number): RefreshRunFixture[] => {
+    const liveJob = liveJobs.find((j) => j.asset_key === assetName || j.name === assetName);
+    if (liveJob && liveJob.runs.length > 0) {
+      return liveJob.runs.map((r) => {
+        const isHardFail = r.label.toLowerCase().includes('fail');
+        const parsedRunLag = parseLagLabelToMinutes(r.lag);
+        const isBreach =
+          isHardFail ||
+          (parsedRunLag !== null ? parsedRunLag > slaMinutes : r.result === 'breach');
+        return {
+          time: r.time,
+          lag: r.lag,
+          rows: r.rows,
+          result: isBreach ? 'breach' : 'ok',
+          label: isHardFail ? 'Run Failed' : isBreach ? 'SLA Breach' : 'On time',
+        };
+      });
+    }
+    const pubRows = publishedRefreshRuns.filter((r: any) => r.asset_key === assetName);
+    return pubRows.map((r: any) => {
+      const rawRes = String(r.result ?? '').toLowerCase();
+      const rawLbl = String(r.result_label ?? '');
+      const isHardFail =
+        rawRes === 'failed' ||
+        rawRes === 'err' ||
+        rawLbl.toLowerCase().includes('fail');
+      const parsedRunLag = parseLagLabelToMinutes(r.lag_label);
+      const isBreach =
+        isHardFail ||
+        (parsedRunLag !== null
+          ? parsedRunLag > slaMinutes
+          : rawRes === 'breach' || rawRes === 'warn');
+      return {
+        time:
+          r.time_label ||
+          (r.completed_at
+            ? String(r.completed_at).slice(0, 16).replace('T', ' ')
+            : 'Recent'),
+        lag: r.lag_label || '—',
+        rows: r.rows_label || '—',
+        result: (isBreach ? 'breach' : 'ok') as 'ok' | 'breach',
+        label: isHardFail ? 'Run Failed' : isBreach ? 'SLA Breach' : 'On time',
+      };
+    });
   };
 
   const pipelineAndNotebookAssets = assets.filter(
@@ -291,6 +356,8 @@ export function Freshness() {
             const rowImpact = isBreach ? resolveActivityImpact(item, combinedCatalog) : null;
             const hasDetails = Boolean(matchedDiag);
             const isExpanded = Boolean(expandedJobIds[item.id]);
+            const isRunsExpanded = Boolean(expandedRunsIds[item.id]);
+            const itemRuns = getRunsForItem(item.name, item.slaMinutes ?? 1440);
             const cleanedWhy = matchedDiag ? cleanFailureMessage(matchedDiag.whyFailed) : '';
             const totalAffected =
               (rowImpact?.upstream.length ?? 0) + (rowImpact?.downstream.length ?? 0);
@@ -298,21 +365,29 @@ export function Freshness() {
             return (
               <div key={item.id} style={css('border-bottom:1px solid var(--border,#e7e7ea);')}>
                 <div
-                  role={hasDetails ? 'button' : undefined}
-                  tabIndex={hasDetails ? 0 : undefined}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
-                    if (hasDetails) toggleJobExpand(item.id);
+                    if (hasDetails) {
+                      toggleJobExpand(item.id);
+                    } else {
+                      toggleRunsExpand(item.id, item.name);
+                    }
                   }}
                   onKeyDown={(e) => {
-                    if (hasDetails && (e.key === 'Enter' || e.key === ' ')) {
+                    if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      toggleJobExpand(item.id);
+                      if (hasDetails) {
+                        toggleJobExpand(item.id);
+                      } else {
+                        toggleRunsExpand(item.id, item.name);
+                      }
                     }
                   }}
                   style={css(
-                    `display:grid;grid-template-columns:1.55fr 0.75fr 0.7fr 1.65fr 0.95fr;gap:12px;padding:11px 18px;align-items:center;cursor:${
-                      hasDetails ? 'pointer' : 'default'
-                    };background:${isExpanded ? 'var(--card2,#fafafa)' : 'transparent'};`,
+                    `display:grid;grid-template-columns:1.55fr 0.75fr 0.7fr 1.65fr 0.95fr;gap:12px;padding:11px 18px;align-items:center;cursor:pointer;background:${
+                      isExpanded || isRunsExpanded ? 'var(--card2,#fafafa)' : 'transparent'
+                    };`,
                   )}
                 >
                   <div style={css('display:flex;align-items:center;gap:8px;min-width:0;')}>
@@ -322,7 +397,9 @@ export function Freshness() {
                           ? isExpanded
                             ? 'ph-caret-down'
                             : 'ph-caret-right'
-                          : 'ph-check-circle'
+                          : isRunsExpanded
+                            ? 'ph-caret-down'
+                            : 'ph-check-circle'
                       }`}
                       style={css(
                         `font-size:13px;color:${
@@ -399,12 +476,23 @@ export function Freshness() {
                     )}
                     <button
                       type="button"
-                      onClick={() => setSelectedAssetKey(item.name)}
+                      onClick={() => toggleRunsExpand(item.id, item.name)}
                       style={css(
-                        'height:27px;padding:0 9px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;',
+                        `height:27px;padding:0 9px;border-radius:6px;border:1px solid ${
+                          isRunsExpanded ? 'var(--accent,#4f46e5)' : 'var(--border,#e7e7ea)'
+                        };background:${
+                          isRunsExpanded ? '#eef2ff' : 'var(--card,#fff)'
+                        };color:${
+                          isRunsExpanded ? 'var(--accent,#4f46e5)' : 'var(--fg)'
+                        };font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;`,
                       )}
                     >
-                      Inspect Runs
+                      <i className={`ph ${isRunsExpanded ? 'ph-caret-up' : 'ph-caret-down'}`} aria-hidden="true" />
+                      {isRunsExpanded
+                        ? 'Hide Runs'
+                        : itemRuns.length > 0
+                          ? `Inspect Runs (${itemRuns.length})`
+                          : 'Inspect Runs'}
                     </button>
                   </div>
                 </div>
@@ -469,13 +557,113 @@ export function Freshness() {
                     )}
                   </div>
                 )}
+
+                {isRunsExpanded && (
+                  <div
+                    style={css(
+                      'padding:12px 18px 14px 40px;background:var(--card2,#fafafa);border-top:1px dashed var(--border,#e7e7ea);display:flex;flex-direction:column;gap:10px;',
+                    )}
+                  >
+                    <div style={css('display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;')}>
+                      <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+                        <span style={css('font-size:12px;font-weight:600;color:var(--fg);')}>
+                          Recent Execution Runs · <span style={css("font-family:'Geist Mono',monospace;")}>{item.name}</span>
+                        </span>
+                        <span style={badge('#4338ca', '#eef2ff')}>
+                          {itemRuns.length} {itemRuns.length === 1 ? 'run' : 'runs'}
+                        </span>
+                        <span style={css("font-size:11px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>
+                          SLA Target: {formatSlaMinutes(item.slaMinutes ?? 1440)}
+                        </span>
+                      </div>
+                      <div style={css('display:flex;align-items:center;gap:6px;')}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedAssetKey(item.name);
+                            inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                          }}
+                          style={css(
+                            'height:26px;padding:0 9px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fgm);font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;',
+                          )}
+                        >
+                          <i className="ph ph-chart-line-up" aria-hidden="true" />
+                          Lag Chart &amp; SLA Config ↓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/assets/${encodeURIComponent(item.name)}/freshness`)}
+                          style={css(
+                            'height:26px;padding:0 9px;border-radius:6px;border:1px solid var(--accent,#4f46e5);background:var(--accent,#4f46e5);color:#fff;font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;',
+                          )}
+                        >
+                          Open Full Asset Detail →
+                        </button>
+                      </div>
+                    </div>
+
+                    {itemRuns.length === 0 ? (
+                      <div style={css('padding:12px 14px;border-radius:8px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);font-size:12px;color:var(--fgm);')}>
+                        No execution runs recorded in Fabric yet for <b style={css("font-family:'Geist Mono',monospace;color:var(--fg);")}>{item.name}</b> (Current status: <b style={css('color:var(--fg);')}>{item.fresh}</b>).
+                      </div>
+                    ) : (
+                      <div style={css('border-radius:8px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);overflow:hidden;')}>
+                        <div style={css('display:grid;grid-template-columns:1.4fr 1fr 1fr 110px;gap:8px;padding:7px 14px;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fgs);border-bottom:1px solid var(--border,#e7e7ea);background:var(--card2,#fafafa);')}>
+                          <span>Run Timestamp</span>
+                          <span>Lag / Elapsed</span>
+                          <span>Details / Trigger</span>
+                          <span style={css('text-align:right;')}>Result</span>
+                        </div>
+                        {itemRuns.map((run, idx) => (
+                          <div
+                            key={`${item.id}-run-${idx}`}
+                            style={css(
+                              `display:grid;grid-template-columns:1.4fr 1fr 1fr 110px;gap:8px;padding:8px 14px;align-items:center;font-size:12px;${
+                                idx < itemRuns.length - 1 ? 'border-bottom:1px solid var(--border,#e7e7ea);' : ''
+                              }`,
+                            )}
+                          >
+                            <span style={css("font-family:'Geist Mono',monospace;color:var(--fg);")}>
+                              {run.time}
+                            </span>
+                            <span
+                              style={css(
+                                `font-family:'Geist Mono',monospace;color:${
+                                  run.result === 'breach' ? 'var(--crit)' : 'var(--fgm)'
+                                };font-weight:${run.result === 'breach' ? 600 : 400};`,
+                              )}
+                            >
+                              {run.lag}
+                            </span>
+                            <span style={css("font-family:'Geist Mono',monospace;color:var(--fgm);font-size:11.5px;")}>
+                              {run.rows}
+                            </span>
+                            <div style={css('text-align:right;')}>
+                              <span
+                                style={
+                                  run.result === 'breach'
+                                    ? badge('var(--crit)', 'var(--critb)')
+                                    : badge('var(--ok)', 'var(--okb)')
+                                }
+                              >
+                                {run.label}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      <FreshnessTab assetKey={targetAssetKey} />
+      <div ref={inspectorRef}>
+        <FreshnessTab assetKey={targetAssetKey} />
+      </div>
 
       <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
         <div style={css('padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;border-bottom:1px solid var(--border,#e7e7ea);')}>
