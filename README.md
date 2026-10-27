@@ -23,7 +23,7 @@ Governly is a native Microsoft Fabric Data Observability application built with 
 | **3. Governly Host Workspace** | **Admin** or **Member** (for installer/owner)<br>**Contributor** or **Viewer** (for app users) | **Fabric Portal → Target Workspace → Manage access** | **Admin / Member** is required when running `nb_governly_installer` to create the SQL Database, AppBackend, `nb_governly_compute_publish` notebook, and 36-minute job schedule. **Admin** is also recommended if you want `nb_governly_compute_publish` to read workspace role assignments (`GET /v1/workspaces/{id}/roleAssignments`). |
 | **4. Monitored Workspaces & Lakehouses** | **Contributor** (or **Viewer** + OneLake **ReadAll**) | **Fabric Portal → Monitored Workspace(s) → Manage access** | The identity that owns/schedules `nb_governly_compute_publish` automatically discovers all workspaces it has access to, lists items/jobs via the Fabric REST API, and profiles Delta tables + `_delta_log` commit history from OneLake (`abfss://...`). |
 | **5. Fabric SQL Database (`governly`)** | Automatic for installer owner; for additional stewards, grant **Read / Write** access | **Fabric Portal → `governly` SQL Database → Manage permissions** (or SQL `db_datareader` / `db_datawriter`) | Allows the web app and `nb_governly_compute_publish` to read published telemetry (`dbo.Pub*`) and write custom Data Quality rules (`dbo.QualityRules`), SLAs, incident statuses (`dbo.IncidentStates`), and steward cases (`dbo.StewardCases`). |
-| **6. Optional: Unattended Service Principal & Key Vault** | **Member / Contributor** on workspaces + **Key Vault Secrets User** on Azure Key Vault | **Entra ID → App registrations**, **Fabric Workspace → Manage access**, and **Azure Portal → Key Vault → Access control (IAM)** | Only needed if you prefer `nb_governly_compute_publish` to authenticate with an Entra Service Principal instead of the scheduling user's Fabric identity. Pass `TENANT_ID`, `CLIENT_ID`, `KEY_VAULT_URI`, and `SECRET_NAME` as notebook parameters. |
+| **6. Optional: Unattended Service Principal & Key Vault** | **Member / Contributor** on workspaces + **Key Vault Secrets User** on Azure Key Vault | **Entra ID → App registrations**, **Fabric Workspace → Manage access**, and **Azure Portal → Key Vault → Access control (IAM)** | Only needed if you prefer `nb_governly_compute_publish` to authenticate with an Entra Service Principal instead of the scheduling user's Fabric identity. Configure `TENANT_ID`, `CLIENT_ID`, `KEY_VAULT_URI`, and `SECRET_NAME` directly in **Governly → Settings** (or as notebook parameters). |
 
 ---
 
@@ -37,9 +37,27 @@ You can deploy or update Governly directly from inside any Microsoft Fabric work
 
 What the installer notebook does automatically (idempotent for both first-time installs and updates):
 - Clones or updates this repository in the notebook environment.
-- Runs `npx rayfin up --yes` to provision or update the Fabric SQL Database, UserDataFunction backend, 25 SQL tables, and Static WebApp.
+- Runs `npx rayfin up --yes` to provision or update the Fabric SQL Database, UserDataFunction backend (`manageComputeNotebook`), 25 SQL tables, and Static WebApp.
 - Deploys or updates the standalone Spark telemetry notebook (`nb_governly_compute_publish`) wired to the workspace's SQL endpoint.
-- Configures the recurring 36-minute background schedule and triggers an immediate initial telemetry run.
+- Triggers a **one-time initial discovery run** so your workspaces and assets appear in the app immediately, while leaving the **recurring schedule OFF by default** to prevent unexpected Spark capacity consumption.
+
+---
+
+## Configuring the Compute Notebook, Workspaces & Schedule in Settings
+
+After installation, open the **Governly** web app and navigate to **Settings** (bottom-left navigation) to configure and control `nb_governly_compute_publish` without editing notebook code:
+
+1. **Monitored Workspaces (`workspace_monitor`):**
+   - Check or uncheck which discovered Fabric workspaces should be profiled.
+   - Unchecked workspaces are skipped during OneLake Delta table scanning, Data Quality rule execution, and dashboard aggregation to save Spark compute time and capacity units (CU).
+2. **Recurring Schedule & Cadence (`compute_schedule`):**
+   - By default, the recurring schedule is **paused (Manual Mode)** after installation, with the default cadence preset to **Every 36m (Default)**.
+   - Select your desired cadence (`Every 15m`, `Every 30m`, **`Every 36m (Default)`**, `Every 1h`, `Every 2h`, `Every 4h`, `Every 6h`, `Every 12h`, or `Every 24h`) and click **Enable Recurring Schedule** (or **Schedule: ON (Click to Pause)**) to update the Fabric Job Scheduler (`RunNotebook`) directly from the UI.
+3. **Trigger On-Demand Runs (`Run Compute Notebook Now`):**
+   - Click **Run Compute Notebook Now** in Settings at any time to queue an immediate `RunNotebook` job on `nb_governly_compute_publish` via the Rayfin User Data Function (`manageComputeNotebook`).
+4. **Notebook Runtime Parameters (`notebook_params`):**
+   - You can leave `TENANT_ID`, `CLIENT_ID`, `KEY_VAULT_URI`, and `SECRET_NAME` blank for zero-config delegated mode (uses the notebook owner's Fabric & OneLake identity).
+   - To use an unattended Entra Service Principal backed by Azure Key Vault, enter `TENANT_ID`, `CLIENT_ID`, `KEY_VAULT_URI` (e.g. `https://<vault>.vault.azure.net/`), and `SECRET_NAME` (default `governly-graph-sync`) directly in **Settings → Notebook Runtime Parameters** and click **Save Notebook Parameters**. `nb_governly_compute_publish` reads these values from the App SQL Database (`dbo.QualityRules`) at the start of every run.
 
 ---
 

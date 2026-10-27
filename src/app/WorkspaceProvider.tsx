@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { client, getRuntimeWorkspaceId } from "../data/client";
+import { COMPUTE_CONFIG_EVENT, loadLocalComputeConfig } from "../data/useComputeConfig";
 
 export interface WorkspaceOption {
   workspace_id: string;
@@ -72,8 +73,29 @@ export function WorkspaceProvider({
   onPersist?: (id: string) => void;
 }) {
   const [liveWorkspaces, setLiveWorkspaces] = useState<WorkspaceOption[]>(initialOptions ?? []);
+  const [excludedIds, setExcludedIds] = useState<string[]>(
+    () => loadLocalComputeConfig().excludedWorkspaceIds
+  );
   const [refreshTick, setRefreshTick] = useState(0);
-  const activeWorkspaces = initialOptions ?? liveWorkspaces;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onSync = () => setExcludedIds(loadLocalComputeConfig().excludedWorkspaceIds);
+    window.addEventListener(COMPUTE_CONFIG_EVENT, onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener(COMPUTE_CONFIG_EVENT, onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, []);
+
+  const rawWorkspaces = initialOptions ?? liveWorkspaces;
+  const activeWorkspaces = useMemo(() => {
+    if (initialOptions !== undefined || excludedIds.length === 0) return rawWorkspaces;
+    const ex = new Set(excludedIds);
+    const filtered = rawWorkspaces.filter((w) => !ex.has(w.workspace_id));
+    return filtered.length > 0 ? filtered : rawWorkspaces;
+  }, [rawWorkspaces, excludedIds, initialOptions]);
 
   const refreshData = useCallback(() => {
     setRefreshTick((t) => t + 1);
@@ -139,9 +161,7 @@ export function WorkspaceProvider({
           "display_name",
           "capacity_sku",
           "is_monitored",
-        ])
-          .where({ is_monitored: { eq: true } })
-          .execute();
+        ]).execute();
         if (cancelled) return;
         const mapped: WorkspaceOption[] = (Array.isArray(wsRows) ? wsRows : []).map((w) => ({
           workspace_id: w.workspace_id,

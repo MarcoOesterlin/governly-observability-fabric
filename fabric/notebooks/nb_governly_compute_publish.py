@@ -803,6 +803,16 @@ def discover_and_profile_live_fabric(
     groups_by_id: dict[str, dict] = {}
     member_rows: list[dict] = []
 
+    excluded_ws_ids: set[str] = {
+        str(r.get("asset_key") or "")
+        for r in (custom_rules or [])
+        if str(r.get("rule_type") or "") == "workspace_monitor"
+        and (
+            str(r.get("expression") or "").lower() == "excluded"
+            or float(r.get("threshold_pct") if r.get("threshold_pct") is not None else 100.0) <= 0
+        )
+    }
+
     for w in ws_raw:
         if w.get("type") != "Workspace":
             continue
@@ -816,7 +826,7 @@ def discover_and_profile_live_fabric(
             "name": w.get("displayName") or wid,
             "capacity_id": w.get("capacityId"),
             "capacity_sku": cap_sku.get(cid, "F2"),
-            "is_monitored": True,
+            "is_monitored": wid not in excluded_ws_ids,
             "capacity_active": is_cap_active,
         })
         try:
@@ -877,6 +887,8 @@ def discover_and_profile_live_fabric(
     default_steward_name = users_by_id.get(default_steward_id, {}).get("display_name", "Workspace Steward")
 
     for w in workspaces:
+        if not w.get("is_monitored", True):
+            continue
         wid = w["workspace_id"]
         ws_steward_id = next(
             (a["object_id"] for a in access_rows if a["workspace_id"] == wid),
@@ -1602,24 +1614,6 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
         SECRET_NAME,
     )
 
-    # Always run live zero-plumbing discovery & OneLake Delta profiling
-    fabric_token = get_runtime_token(
-        "https://api.fabric.microsoft.com/.default",
-        TENANT_ID,
-        CLIENT_ID,
-        KEY_VAULT_URI,
-        SECRET_NAME,
-    )
-    try:
-        storage_token = get_runtime_token(
-            "https://storage.azure.com/.default",
-            TENANT_ID,
-            CLIENT_ID,
-            KEY_VAULT_URI,
-            SECRET_NAME,
-        )
-    except Exception:
-        storage_token = ""
     rules_conn = open_fabric_sql_jdbc(spark, APP_SQL_SERVER, APP_SQL_DATABASE, sql_token)
     try:
         user_quality_rules = read_custom_quality_rules(rules_conn)
@@ -1627,6 +1621,44 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
         prior_columns = read_existing_pub_columns(rules_conn)
     finally:
         rules_conn.close()
+
+    eff_tenant_id = TENANT_ID
+    eff_client_id = CLIENT_ID
+    eff_kv_uri = KEY_VAULT_URI
+    eff_secret_name = SECRET_NAME
+    for r in user_quality_rules:
+        if str(r.get("rule_type") or "") == "notebook_params" and r.get("expression"):
+            try:
+                cfg = json.loads(str(r["expression"]))
+                if cfg.get("tenantId"):
+                    eff_tenant_id = str(cfg["tenantId"]).strip()
+                if cfg.get("clientId"):
+                    eff_client_id = str(cfg["clientId"]).strip()
+                if cfg.get("keyVaultUri"):
+                    eff_kv_uri = str(cfg["keyVaultUri"]).strip()
+                if cfg.get("secretName"):
+                    eff_secret_name = str(cfg["secretName"]).strip()
+            except Exception:
+                pass
+
+    # Always run live zero-plumbing discovery & OneLake Delta profiling
+    fabric_token = get_runtime_token(
+        "https://api.fabric.microsoft.com/.default",
+        eff_tenant_id,
+        eff_client_id,
+        eff_kv_uri,
+        eff_secret_name,
+    )
+    try:
+        storage_token = get_runtime_token(
+            "https://storage.azure.com/.default",
+            eff_tenant_id,
+            eff_client_id,
+            eff_kv_uri,
+            eff_secret_name,
+        )
+    except Exception:
+        storage_token = ""
     live = discover_and_profile_live_fabric(
         spark,
         fabric_token,
@@ -1920,6 +1952,8 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
     case_links: list[dict] = []
 
     for w in lh_workspaces:
+        if not w.get("is_monitored", True):
+            continue
         wid = w["workspace_id"]
         ws_assets = [a for a in pub_assets if a["workspace_id"] == wid]
         healthy_cnt = sum(1 for a in ws_assets if a["status"] == "healthy")

@@ -23,6 +23,9 @@ services:
     indexDocument: index.html
     assetAccess: protected
   functions:
-    enabled: false
+    enabled: true
+    buildCommand: npm run build
+    auth:
+      type: application
   storage:
     enabled: false
