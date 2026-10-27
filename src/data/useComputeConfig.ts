@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspace, type WorkspaceOption } from '../app/WorkspaceProvider';
 import { client, getRuntimeWorkspaceId, isHostWorkspace } from './client';
 import { invalidateQueryCache } from './queryCache';
+import { fetchSharedQualityRules } from './sharedTables';
 import { useCurrentSteward } from './useCurrentSteward';
 
 export const DEFAULT_COMPUTE_CADENCE_MINUTES = 36;
@@ -364,26 +365,7 @@ export function useComputeConfig() {
 
     void (async () => {
       try {
-        const ruleRows = await client.data.QualityRule.select([
-          'id',
-          'asset_key',
-          'rule_type',
-          'expression',
-          'threshold_pct',
-          'is_active',
-        ])
-          .execute()
-          .catch(
-            () =>
-              [] as Array<{
-                id?: string;
-                asset_key?: string;
-                rule_type?: string;
-                expression?: string;
-                threshold_pct?: number;
-                is_active?: boolean;
-              }>,
-          );
+        const ruleRows = await fetchSharedQualityRules(0);
 
         if (cancelled || localMutationSeq !== seqAtStart) return;
         if (!Array.isArray(ruleRows) || ruleRows.length === 0) return;

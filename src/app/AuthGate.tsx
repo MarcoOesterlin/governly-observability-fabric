@@ -6,8 +6,14 @@ import { AppSpinner } from "../components/ui/AppSpinner";
 type Session = { user?: { id: string; email?: string; name?: string } } | null;
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const [ready, setReady] = useState(false);
-  const [session, setSession] = useState<Session>(null);
+  const [session, setSession] = useState<Session>(() => {
+    try {
+      return (client.auth.getSession() as Session) ?? null;
+    } catch {
+      return null;
+    }
+  });
+  const [ready, setReady] = useState<boolean>(() => Boolean(session?.user));
 
   useEffect(() => {
     let cancelled = false;
@@ -23,7 +29,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       } finally {
         if (!cancelled) {
           const current = client.auth.getSession() as Session;
-          setSession((prev) => prev ?? current);
+          setSession((prev) => current ?? prev);
           setReady(true);
         }
       }

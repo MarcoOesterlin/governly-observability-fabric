@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { client } from "./client";
 import { matchEntraUser } from "./identity";
+import { fetchSharedPubEntraUsers } from "./sharedTables";
 
 export interface PubEntraUserRow {
   object_id: string;
@@ -177,8 +178,13 @@ function buildInitialSteward(): CurrentStewardState {
   };
 }
 
+let cachedStewardState: CurrentStewardState | null = null;
+let inflightStewardPromise: Promise<CurrentStewardState | null> | null = null;
+
 export function useCurrentSteward(): CurrentStewardState {
-  const [state, setState] = useState<CurrentStewardState>(buildInitialSteward);
+  const [state, setState] = useState<CurrentStewardState>(
+    () => cachedStewardState ?? buildInitialSteward()
+  );
   const [authTick, setAuthTick] = useState(0);
 
   useEffect(() => {
@@ -188,6 +194,8 @@ export function useCurrentSteward(): CurrentStewardState {
       };
       if (typeof authObj?.onSessionChange === "function") {
         return authObj.onSessionChange(() => {
+          cachedStewardState = null;
+          inflightStewardPromise = null;
           setAuthTick((t) => t + 1);
         });
       }
@@ -199,69 +207,109 @@ export function useCurrentSteward(): CurrentStewardState {
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      const ident = resolveSessionIdentity();
-      try {
-        const users = await client.data.PubEntraUser.select([
-          "object_id",
-          "upn",
-          "display_name",
-          "job_title",
-          "department",
-          "is_synthetic",
-        ])
-          .first(200)
-          .execute();
-        if (cancelled) return;
-        const allUserRows = Array.isArray(users) ? users : [];
-        const realUserRows = allUserRows.filter((u) => !u.is_synthetic);
-        const candidateRows = realUserRows.length > 0 ? realUserRows : allUserRows;
+    if (cachedStewardState && authTick === 0) {
+      setState(cachedStewardState);
+      return;
+    }
+    if (!inflightStewardPromise) {
+      inflightStewardPromise = (async (): Promise<CurrentStewardState | null> => {
+        const ident = resolveSessionIdentity();
+        try {
+          const users = await fetchSharedPubEntraUsers(0);
+          const allUserRows = Array.isArray(users) ? users : [];
+          const realUserRows = allUserRows.filter((u) => !u.is_synthetic);
+          const candidateRows = realUserRows.length > 0 ? realUserRows : allUserRows;
 
-        let matched =
-          ident.oid || ident.email
-            ? matchEntraUser(candidateRows, {
-                oid: ident.oid,
-                email: ident.email,
-              })
-            : candidateRows[0];
+          let matched =
+            ident.oid || ident.email
+              ? matchEntraUser(candidateRows, {
+                  oid: ident.oid,
+                  email: ident.email,
+                })
+              : candidateRows[0];
 
-        if (!matched && (!ident.displayName || ident.displayName === "Workspace Steward") && candidateRows.length > 0) {
-          matched = candidateRows[0];
-        }
+          if (!matched && (!ident.displayName || ident.displayName === "Workspace Steward") && candidateRows.length > 0) {
+            matched = candidateRows[0];
+          }
 
-        if (!matched) {
-          // Check AppUser table if available before falling back to session identity
-          let appUserDisplayName: string | undefined;
-          try {
-            const appUserRepo = (client.data as Record<string, any>).AppUser;
-            if (appUserRepo && (ident.email || ident.oid)) {
-              const appUsers = await appUserRepo
-                .select(["id", "email", "display_name", "role"])
-                .first(50)
-                .execute();
-              if (Array.isArray(appUsers)) {
-                const foundAppUser = appUsers.find(
-                  (au: any) =>
-                    (ident.email &&
-                      String(au.email ?? "").toLowerCase() === ident.email.toLowerCase()) ||
-                    (ident.oid && String(au.id ?? "").toLowerCase() === ident.oid.toLowerCase())
-                );
-                if (foundAppUser?.display_name) {
-                  appUserDisplayName = String(foundAppUser.display_name);
+          if (!matched) {
+            let appUserDisplayName: string | undefined;
+            try {
+              const appUserRepo = (client.data as Record<string, any>).AppUser;
+              if (appUserRepo && (ident.email || ident.oid)) {
+                const appUsers = await appUserRepo
+                  .select(["id", "email", "display_name", "role"])
+                  .first(50)
+                  .execute();
+                if (Array.isArray(appUsers)) {
+                  const foundAppUser = appUsers.find(
+                    (au: any) =>
+                      (ident.email &&
+                        String(au.email ?? "").toLowerCase() === ident.email.toLowerCase()) ||
+                      (ident.oid && String(au.id ?? "").toLowerCase() === ident.oid.toLowerCase())
+                  );
+                  if (foundAppUser?.display_name) {
+                    appUserDisplayName = String(foundAppUser.display_name);
+                  }
                 }
               }
+            } catch {
+              // ignore optional AppUser lookup error
             }
-          } catch {
-            // ignore optional AppUser lookup error
+            if (ident.email || ident.displayName || ident.oid) {
+              const finalName = formatDisplayNameFromIdentity(
+                appUserDisplayName ?? ident.displayName,
+                ident.email
+              );
+              const finalUpn = ident.email ?? "steward@fabric.local";
+              const resolved: CurrentStewardState = {
+                status: "matched",
+                entra: {
+                  object_id: ident.oid ?? "00000000-0000-0000-0000-000000000001",
+                  upn: finalUpn,
+                  display_name: finalName,
+                  job_title: "Workspace Admin · Data Steward",
+                  department: "Data Governance",
+                  is_synthetic: false,
+                },
+                initials: deriveInitialsFromIdentity(finalName, finalUpn),
+                roles: [{ role: "admin", domain_key: null }],
+                canWrite: true,
+                isSynthetic: false,
+              };
+              cachedStewardState = resolved;
+              return resolved;
+            }
+            return null;
           }
-          if (cancelled) return;
+
+          const roles = await client.data.PubUserRole.select(["role", "domain_key"])
+            .where({ object_id: { eq: matched.object_id } })
+            .execute();
+          const cleanDisplayName = formatDisplayNameFromIdentity(
+            matched.display_name,
+            matched.upn || ident.email
+          );
+          const enrichedEntra: PubEntraUserRow = {
+            ...matched,
+            display_name: cleanDisplayName,
+            upn: matched.upn || ident.email || "steward@fabric.local",
+          };
+          const resolved: CurrentStewardState = {
+            status: "matched",
+            entra: enrichedEntra,
+            initials: deriveInitialsFromIdentity(enrichedEntra.display_name, enrichedEntra.upn),
+            roles: Array.isArray(roles) ? roles : [],
+            canWrite: true,
+            isSynthetic: Boolean(matched.is_synthetic),
+          };
+          cachedStewardState = resolved;
+          return resolved;
+        } catch {
           if (ident.email || ident.displayName || ident.oid) {
-            const finalName = formatDisplayNameFromIdentity(
-              appUserDisplayName ?? ident.displayName,
-              ident.email
-            );
+            const finalName = ident.displayName ?? formatDisplayNameFromIdentity(undefined, ident.email);
             const finalUpn = ident.email ?? "steward@fabric.local";
-            setState({
+            const resolved: CurrentStewardState = {
               status: "matched",
               entra: {
                 object_id: ident.oid ?? "00000000-0000-0000-0000-000000000001",
@@ -275,54 +323,23 @@ export function useCurrentSteward(): CurrentStewardState {
               roles: [{ role: "admin", domain_key: null }],
               canWrite: true,
               isSynthetic: false,
-            });
+            };
+            cachedStewardState = resolved;
+            return resolved;
           }
-          return;
+          return null;
+        } finally {
+          inflightStewardPromise = null;
         }
+      })();
+    }
 
-        const roles = await client.data.PubUserRole.select(["role", "domain_key"])
-          .where({ object_id: { eq: matched.object_id } })
-          .execute();
-        if (cancelled) return;
-        const cleanDisplayName = formatDisplayNameFromIdentity(
-          matched.display_name,
-          matched.upn || ident.email
-        );
-        const enrichedEntra: PubEntraUserRow = {
-          ...matched,
-          display_name: cleanDisplayName,
-          upn: matched.upn || ident.email || "steward@fabric.local",
-        };
-        setState({
-          status: "matched",
-          entra: enrichedEntra,
-          initials: deriveInitialsFromIdentity(enrichedEntra.display_name, enrichedEntra.upn),
-          roles: Array.isArray(roles) ? roles : [],
-          canWrite: true,
-          isSynthetic: Boolean(matched.is_synthetic),
-        });
-      } catch {
-        if (!cancelled && (ident.email || ident.displayName || ident.oid)) {
-          const finalName = ident.displayName ?? formatDisplayNameFromIdentity(undefined, ident.email);
-          const finalUpn = ident.email ?? "steward@fabric.local";
-          setState({
-            status: "matched",
-            entra: {
-              object_id: ident.oid ?? "00000000-0000-0000-0000-000000000001",
-              upn: finalUpn,
-              display_name: finalName,
-              job_title: "Workspace Admin · Data Steward",
-              department: "Data Governance",
-              is_synthetic: false,
-            },
-            initials: deriveInitialsFromIdentity(finalName, finalUpn),
-            roles: [{ role: "admin", domain_key: null }],
-            canWrite: true,
-            isSynthetic: false,
-          });
-        }
+    void inflightStewardPromise.then((res) => {
+      if (!cancelled && res) {
+        setState(res);
       }
-    })();
+    });
+
     return () => {
       cancelled = true;
     };

@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { client, getRuntimeWorkspaceId, isHostWorkspace } from "../data/client";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { getRuntimeWorkspaceId, isHostWorkspace } from "../data/client";
+import { fetchSharedPubWorkspaces } from "../data/sharedTables";
 import {
   ALL_WORKSPACES_EVENT,
   COMPUTE_CONFIG_EVENT,
@@ -145,9 +146,33 @@ export function WorkspaceProvider({
   const hasCompletedScan =
     initialOptions !== undefined || localHasScan || dbHasScan || activeWorkspaces.length > 0;
 
+  const lastRefreshAtRef = useRef<number>(Date.now());
   const refreshData = useCallback(() => {
+    lastRefreshAtRef.current = Date.now();
     setRefreshTick((t) => t + 1);
   }, []);
+
+  useEffect(() => {
+    if (initialOptions !== undefined || typeof window === "undefined") return;
+    const onVisibility = () => {
+      if (
+        document.visibilityState === "visible" &&
+        Date.now() - lastRefreshAtRef.current >= 25_000
+      ) {
+        refreshData();
+      }
+    };
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refreshData();
+      }
+    }, 60_000);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [initialOptions, refreshData]);
 
   const initial = useMemo(
     () =>
@@ -211,12 +236,7 @@ export function WorkspaceProvider({
     setStatus("loading");
     void (async () => {
       try {
-        const wsRows = await client.data.PubWorkspace.select([
-          "workspace_id",
-          "display_name",
-          "capacity_sku",
-          "is_monitored",
-        ]).execute();
+        const wsRows = await fetchSharedPubWorkspaces(refreshTick);
         if (cancelled) return;
         const mapped: WorkspaceOption[] = (Array.isArray(wsRows) ? wsRows : [])
           .filter((w) => !isHostWorkspace(w.workspace_id, w.display_name))

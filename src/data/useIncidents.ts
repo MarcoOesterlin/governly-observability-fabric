@@ -12,6 +12,14 @@ import { toIncidentFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { IncidentFilter } from "./queryKeys";
 import {
+  fetchSharedCaseIncidentLinks,
+  fetchSharedIncidentStates,
+  fetchSharedPubAssets,
+  fetchSharedPubEntraUsers,
+  fetchSharedPubIncidents,
+  fetchSharedStewardCases,
+} from "./sharedTables";
+import {
   CASE_STATUS_EVENT,
   INCIDENT_STATUS_EVENT,
   isCaseLinkedToIncident,
@@ -67,60 +75,14 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
   const rows = useCachedQuery<IncidentFixture[]>(
     workspaceId ? `incidents:${workspaceId}` : null,
     async () => {
-      const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const basePub = client.data.PubIncident.select([
-        "incident_key",
-        "severity",
-        "title",
-        "asset_key",
-        "monitor_type",
-        "monitor_label",
-        "summary",
-        "sla_target_label",
-        "observed_label",
-        "domain_key",
-        "detected_at",
-        "auto_resolved_at",
-      ]);
-      const baseOverlay = client.data.IncidentState.select([
-        "incident_key",
-        "status",
-        "assignee_name",
-      ]);
-      const baseAssetOwners = client.data.PubAsset.select([
-        "asset_key",
-        "owner_name",
-      ]);
-      const baseCases = client.data.StewardCase.select([
-        "id",
-        "case_key",
-        "title",
-        "status",
-      ]);
       const [pubRows, overlays, assetOwnerRows, entraUsers, caseRows, caseLinks] =
         await Promise.all([
-          isAll
-            ? basePub.execute()
-            : basePub.where({ workspace_id: { eq: workspaceId! } }).execute(),
-          (isAll
-            ? baseOverlay.execute()
-            : baseOverlay.where({ workspace_id: { eq: workspaceId! } }).execute()
-          ).catch(() => []),
-          (isAll
-            ? baseAssetOwners.execute()
-            : baseAssetOwners.where({ workspace_id: { eq: workspaceId! } }).execute()
-          ).catch(() => []),
-          client.data.PubEntraUser.select(["display_name", "is_synthetic"])
-            .first(50)
-            .execute()
-            .catch(() => []),
-          (isAll
-            ? baseCases.execute()
-            : baseCases.where({ workspace_id: { eq: workspaceId! } }).execute()
-          ).catch(() => []),
-          client.data.CaseIncidentLink.select(["case.id", "incident_key"])
-            .execute()
-            .catch(() => []),
+          fetchSharedPubIncidents(workspaceId!, refreshTick),
+          fetchSharedIncidentStates(workspaceId!, refreshTick),
+          fetchSharedPubAssets(workspaceId!, refreshTick),
+          fetchSharedPubEntraUsers(refreshTick),
+          fetchSharedStewardCases(workspaceId!, refreshTick),
+          fetchSharedCaseIncidentLinks(refreshTick),
         ]);
       if (!Array.isArray(pubRows) || pubRows.length === 0) return [];
       const stateByKey = new Map(
@@ -366,45 +328,12 @@ export function useCases(): CaseFixture[] {
   const rows = useCachedQuery<CaseFixture[]>(
     workspaceId ? `cases:${workspaceId}` : null,
     async () => {
-      const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const baseCases = client.data.StewardCase.select([
-        "id",
-        "case_key",
-        "title",
-        "domain_key",
-        "priority",
-        "status",
-        "owner_name",
-        "due_date",
-      ]);
-      const basePubIncs = client.data.PubIncident.select([
-        "incident_key",
-        "asset_key",
-        "auto_resolved_at",
-      ]);
-      const baseIncStates = client.data.IncidentState.select([
-        "incident_key",
-        "status",
-      ]);
       const [rows, links, entraUsers, pubIncs, incStates] = await Promise.all([
-        isAll
-          ? baseCases.execute()
-          : baseCases.where({ workspace_id: { eq: workspaceId! } }).execute(),
-        client.data.CaseIncidentLink.select(["case.id", "incident_key"])
-          .execute()
-          .catch(() => []),
-        client.data.PubEntraUser.select(["display_name", "is_synthetic"])
-          .first(50)
-          .execute()
-          .catch(() => []),
-        (isAll
-          ? basePubIncs.execute()
-          : basePubIncs.where({ workspace_id: { eq: workspaceId! } }).execute()
-        ).catch(() => []),
-        (isAll
-          ? baseIncStates.execute()
-          : baseIncStates.where({ workspace_id: { eq: workspaceId! } }).execute()
-        ).catch(() => []),
+        fetchSharedStewardCases(workspaceId!, refreshTick),
+        fetchSharedCaseIncidentLinks(refreshTick),
+        fetchSharedPubEntraUsers(refreshTick),
+        fetchSharedPubIncidents(workspaceId!, refreshTick),
+        fetchSharedIncidentStates(workspaceId!, refreshTick),
       ]);
       if (!Array.isArray(rows) || rows.length === 0) return [];
       const fallbackEntraName =

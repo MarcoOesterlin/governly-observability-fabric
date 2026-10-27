@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ALL_WORKSPACES_ID, useWorkspace } from '../app/WorkspaceProvider';
 import { client } from './client';
 import { useCachedQuery } from './queryCache';
+import { fetchSharedQualityRules } from './sharedTables';
 import { useCurrentSteward } from './useCurrentSteward';
 
 const SLA_STORAGE_KEY = 'governly.freshnessSlas';
@@ -75,7 +76,9 @@ export function loadLocalSlas(): SlaMap {
 function saveLocalSlas(next: SlaMap): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(SLA_STORAGE_KEY, JSON.stringify(next));
+    const nextStr = JSON.stringify(next);
+    if (window.localStorage.getItem(SLA_STORAGE_KEY) === nextStr) return;
+    window.localStorage.setItem(SLA_STORAGE_KEY, nextStr);
     window.dispatchEvent(new CustomEvent(SLA_EVENT));
   } catch {
     // ignore storage errors
@@ -121,20 +124,12 @@ export function useFreshnessSlas() {
   const remoteSlas = useCachedQuery<SlaMap>(
     workspaceId ? `freshness-slas:${workspaceId}` : null,
     async () => {
-      const baseQuery = client.data.QualityRule.select([
-        'id',
-        'asset_key',
-        'rule_type',
-        'threshold_pct',
-        'is_active',
-      ]);
-      const rows =
-        workspaceId === ALL_WORKSPACES_ID
-          ? await baseQuery.where({ rule_type: { eq: 'freshness_sla' } }).execute()
-          : await baseQuery
-              .where({ workspace_id: { eq: workspaceId! }, rule_type: { eq: 'freshness_sla' } })
-              .execute();
-      if (!Array.isArray(rows)) return {};
+      const allRows = await fetchSharedQualityRules(refreshTick);
+      const rows = allRows.filter(
+        (r) =>
+          r.rule_type === 'freshness_sla' &&
+          (workspaceId === ALL_WORKSPACES_ID || !r.workspace_id || r.workspace_id === workspaceId),
+      );
       const next: SlaMap = { ...loadLocalSlas() };
       for (const r of rows) {
         if (r.is_active && Number(r.threshold_pct) > 0) {
@@ -405,7 +400,9 @@ export function loadLocalLandingTimes(): LandingTimeMap {
 function saveLocalLandingTimes(next: LandingTimeMap): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(LANDING_STORAGE_KEY, JSON.stringify(next));
+    const nextStr = JSON.stringify(next);
+    if (window.localStorage.getItem(LANDING_STORAGE_KEY) === nextStr) return;
+    window.localStorage.setItem(LANDING_STORAGE_KEY, nextStr);
     window.dispatchEvent(new CustomEvent(LANDING_EVENT));
   } catch {
     // ignore storage errors
@@ -433,20 +430,12 @@ export function useExpectedLandingTimes() {
   const remoteLandingMap = useCachedQuery<LandingTimeMap>(
     workspaceId ? `expected-landing-times:${workspaceId}` : null,
     async () => {
-      const baseQuery = client.data.QualityRule.select([
-        'id',
-        'asset_key',
-        'rule_type',
-        'expression',
-        'is_active',
-      ]);
-      const rows =
-        workspaceId === ALL_WORKSPACES_ID
-          ? await baseQuery.where({ rule_type: { eq: 'landing_time_sla' } }).execute()
-          : await baseQuery
-              .where({ workspace_id: { eq: workspaceId! }, rule_type: { eq: 'landing_time_sla' } })
-              .execute();
-      if (!Array.isArray(rows)) return {};
+      const allRows = await fetchSharedQualityRules(refreshTick);
+      const rows = allRows.filter(
+        (r) =>
+          r.rule_type === 'landing_time_sla' &&
+          (workspaceId === ALL_WORKSPACES_ID || !r.workspace_id || r.workspace_id === workspaceId),
+      );
       const next: LandingTimeMap = { ...loadLocalLandingTimes() };
       for (const r of rows) {
         if (r.is_active && r.asset_key && r.expression) {

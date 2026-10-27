@@ -371,18 +371,27 @@ export function useSchemaChanges(limit: number = 10): SchemaChangeFixture[] {
 
 export function useLastPublishRun(): { label: string; shortLabel: string; status: string } {
   const { refreshTick } = useWorkspace();
+  const [clockTick, setClockTick] = useState(0);
 
-  return useCachedQuery<{ label: string; shortLabel: string; status: string }>(
-    "last-publish-run",
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const timer = window.setInterval(() => {
+      setClockTick((t) => t + 1);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const rawRun = useCachedQuery<{ tsRaw: string; status: string } | null>(
+    "last-publish-run-raw",
     async () => {
       const rows = await client.data.PubPublishRun.select([
         "ended_at",
         "started_at",
         "status",
       ])
-        .first(10)
+        .first(500)
         .execute();
-      if (!Array.isArray(rows) || rows.length === 0) return DEFAULT_PUBLISH_RUN_INFO;
+      if (!Array.isArray(rows) || rows.length === 0) return null;
       const sorted = [...rows].sort((a, b) =>
         String(b.ended_at ?? b.started_at ?? "").localeCompare(
           String(a.ended_at ?? a.started_at ?? "")
@@ -390,25 +399,30 @@ export function useLastPublishRun(): { label: string; shortLabel: string; status
       );
       const latest = sorted[0];
       const tsRaw = String(latest.ended_at ?? latest.started_at ?? "");
-      const dt = new Date(tsRaw);
-      if (Number.isNaN(dt.getTime())) return DEFAULT_PUBLISH_RUN_INFO;
-      const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
-      const rel =
-        diffMin < 1
-          ? "just now"
-          : diffMin < 60
-            ? `${diffMin}m ago (${dt.toISOString().slice(11, 16)} UTC)`
-            : `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago (${dt.toISOString().slice(0, 16).replace("T", " ")} UTC)`;
-      const shortRel =
-        diffMin < 1
-          ? "Synced just now"
-          : diffMin < 60
-            ? `Synced ${diffMin}m ago`
-            : `Synced ${Math.floor(diffMin / 60)}h ago`;
-      return { label: rel, shortLabel: shortRel, status: String(latest.status ?? "Succeeded") };
+      if (!tsRaw) return null;
+      return { tsRaw, status: String(latest.status ?? "Succeeded") };
     },
-    DEFAULT_PUBLISH_RUN_INFO,
+    null,
     refreshTick
   );
+
+  void clockTick;
+  if (!rawRun?.tsRaw) return DEFAULT_PUBLISH_RUN_INFO;
+  const dt = new Date(rawRun.tsRaw);
+  if (Number.isNaN(dt.getTime())) return DEFAULT_PUBLISH_RUN_INFO;
+  const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
+  const rel =
+    diffMin < 1
+      ? "just now"
+      : diffMin < 60
+        ? `${diffMin}m ago (${dt.toISOString().slice(11, 16)} UTC)`
+        : `${Math.floor(diffMin / 60)}h ${diffMin % 60}m ago (${dt.toISOString().slice(0, 16).replace("T", " ")} UTC)`;
+  const shortRel =
+    diffMin < 1
+      ? "Synced just now"
+      : diffMin < 60
+        ? `Synced ${diffMin}m ago`
+        : `Synced ${Math.floor(diffMin / 60)}h ago`;
+  return { label: rel, shortLabel: shortRel, status: rawRun.status };
 }
 

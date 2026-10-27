@@ -1,9 +1,14 @@
 import { ALL_WORKSPACES_ID, useWorkspace } from "../app/WorkspaceProvider";
 import type { AssetFixture } from "../fixtures/types";
-import { client, isHostWorkspace } from "./client";
+import { isHostWorkspace } from "./client";
 import { toAssetFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { AssetFilter } from "./queryKeys";
+import {
+  fetchSharedPubAssets,
+  fetchSharedPubQualityResults,
+  fetchSharedQualityRules,
+} from "./sharedTables";
 import { useLiveRuntimeJobs, type LiveRuntimeJobItem } from "./useComputeConfig";
 import { isQualityRuleDeleted, isSystemQualityRuleRow } from "./useQualityRules";
 import {
@@ -149,52 +154,15 @@ export function useAssets(filter: AssetFilter = {}): {
     workspaceId ? `assets:${workspaceId}` : null,
     async () => {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const baseQuery = client.data.PubAsset.select([
-        "workspace_id",
-        "asset_key",
-        "name",
-        "asset_type",
-        "domain_key",
-        "domain_name",
-        "owner_name",
-        "freshness_label",
-        "is_late",
-        "quality_score",
-        "health_score",
-        "status",
-        "sla_minutes",
-        "row_count_label",
-        "quality_pass",
-        "quality_total",
-        "fabric_item_url",
-      ]);
-      const baseQRes = client.data.PubQualityResult.select([
-        "asset_key",
-        "rule_name",
-        "observed_label",
-        "result",
-      ]);
-      const baseRules = client.data.QualityRule.select([
-        "asset_key",
-        "rule_name",
-        "rule_type",
-        "threshold_pct",
-        "is_active",
-      ]);
-      const [res, qResults, userRules] = await Promise.all([
-        isAll
-          ? baseQuery.first(500).execute()
-          : baseQuery.where({ workspace_id: { eq: workspaceId! } }).first(200).execute(),
-        (isAll
-          ? baseQRes.first(500).execute()
-          : baseQRes.where({ workspace_id: { eq: workspaceId! } }).first(500).execute()
-        ).catch(() => []),
-        (isAll
-          ? baseRules.first(200).execute()
-          : baseRules.where({ workspace_id: { eq: workspaceId! } }).first(200).execute()
-        ).catch(() => []),
+      const [res, qResults, allUserRules] = await Promise.all([
+        fetchSharedPubAssets(workspaceId!, refreshTick),
+        fetchSharedPubQualityResults(workspaceId!, refreshTick),
+        fetchSharedQualityRules(refreshTick),
       ]);
       if (!Array.isArray(res) || res.length === 0) return [];
+      const userRules = isAll
+        ? allUserRules
+        : allUserRules.filter((r) => !r.workspace_id || r.workspace_id === workspaceId);
       const activeUserRules = (Array.isArray(userRules) ? userRules : []).filter(
         (ur) => ur.is_active !== false && !isSystemQualityRuleRow(ur) && !isQualityRuleDeleted(undefined, ur.rule_name),
       );
@@ -284,28 +252,10 @@ export function useRuntimeAssets(): {
   const allSqlRows = useCachedQuery<AssetItem[]>(
     "runtime-assets:all-workspaces",
     async () => {
-      const res: Array<Record<string, any>> = await client.data.PubAsset.select([
-        "workspace_id",
-        "asset_key",
-        "name",
-        "asset_type",
-        "domain_key",
-        "domain_name",
-        "owner_name",
-        "freshness_label",
-        "is_late",
-        "quality_score",
-        "health_score",
-        "status",
-        "sla_minutes",
-        "row_count_label",
-        "quality_pass",
-        "quality_total",
-        "fabric_item_url",
-      ])
-        .first(500)
-        .execute()
-        .catch(() => []);
+      const res: Array<Record<string, any>> = await fetchSharedPubAssets(
+        ALL_WORKSPACES_ID,
+        refreshTick,
+      ).catch(() => []);
       if (!Array.isArray(res) || res.length === 0) return [];
       return res
         .filter((r) => {

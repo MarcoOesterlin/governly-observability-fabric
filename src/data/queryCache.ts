@@ -4,6 +4,7 @@ interface CacheEntry<T> {
   value: T;
   updatedAt: number;
   tick: number;
+  liveSession?: boolean;
 }
 
 const memoryCache = new Map<string, CacheEntry<unknown>>();
@@ -39,7 +40,7 @@ function scheduleNotify(key: string, immediate = false): void {
   if (coalesceTimer === null) {
     coalesceTimer = setTimeout(() => {
       flushNotifications();
-    }, 50);
+    }, 80);
   }
 }
 
@@ -54,8 +55,11 @@ function readEntry<T>(key: string): CacheEntry<T> | undefined {
       if (raw) {
         const parsed = JSON.parse(raw) as CacheEntry<T>;
         if (parsed && "value" in parsed) {
-          memoryCache.set(key, parsed);
-          return parsed;
+          // Mark hydrated storage entries with liveSession: false so we render immediately (0ms)
+          // AND always revalidate in the background on a fresh page load.
+          const hydrated: CacheEntry<T> = { ...parsed, liveSession: false };
+          memoryCache.set(key, hydrated);
+          return hydrated;
         }
       }
     } catch {
@@ -71,11 +75,20 @@ function writeEntry<T>(
   tick: number,
   immediate = false
 ): void {
-  const entry: CacheEntry<T> = { value, updatedAt: Date.now(), tick };
+  const entry: CacheEntry<T> = {
+    value,
+    updatedAt: Date.now(),
+    tick,
+    liveSession: true,
+  };
   memoryCache.set(key, entry);
   if (typeof window !== "undefined") {
     try {
-      const serialized = JSON.stringify(entry);
+      const serialized = JSON.stringify({
+        value,
+        updatedAt: entry.updatedAt,
+        tick,
+      });
       window.localStorage.setItem(SESSION_PREFIX + key, serialized);
     } catch {
       // ignore quota errors
@@ -84,12 +97,59 @@ function writeEntry<T>(
   scheduleNotify(key, immediate);
 }
 
+/**
+ * Shared promise/memory cache for underlying SQL table queries so multiple hooks
+ * mounted simultaneously reuse a single network request per table.
+ */
+export function fetchSharedQuery<T>(
+  key: string,
+  fetcher: () => Promise<T>,
+  refreshTick: number = 0,
+  ttlMs: number = 25_000
+): Promise<T> {
+  const existing = memoryCache.get(key) as CacheEntry<T> | undefined;
+  if (
+    existing &&
+    existing.liveSession &&
+    existing.tick === refreshTick &&
+    Date.now() - existing.updatedAt < ttlMs
+  ) {
+    return Promise.resolve(existing.value);
+  }
+  const inflight = inflightMap.get(key) as Promise<T> | undefined;
+  if (inflight) return inflight;
+
+  const p = fetcher()
+    .then((res) => {
+      inflightMap.delete(key);
+      memoryCache.set(key, {
+        value: res,
+        updatedAt: Date.now(),
+        tick: refreshTick,
+        liveSession: true,
+      });
+      if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
+        flushNotifications();
+      }
+      return res;
+    })
+    .catch((err) => {
+      inflightMap.delete(key);
+      if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
+        flushNotifications();
+      }
+      throw err;
+    });
+  inflightMap.set(key, p);
+  return p;
+}
+
 export function invalidateQueryCache(prefix?: string): void {
   for (const key of Array.from(memoryCache.keys())) {
     if (!prefix || key.startsWith(prefix)) {
       const cur = memoryCache.get(key);
       if (cur) {
-        memoryCache.set(key, { ...cur, updatedAt: 0, tick: -1 });
+        memoryCache.set(key, { ...cur, updatedAt: 0, tick: -1, liveSession: false });
       }
     }
   }
@@ -115,7 +175,7 @@ export function useCachedQuery<T>(
   fetcher: () => Promise<T>,
   fallback: T,
   refreshTick: number = 0,
-  ttlMs: number = 180_000
+  ttlMs: number = 30_000
 ): T {
   const [state, setState] = useState<T>(() => {
     if (!key) return fallback;
@@ -147,7 +207,9 @@ export function useCachedQuery<T>(
     if (existing) {
       setState(existing.value);
       const isFresh =
-        existing.tick === refreshTick && Date.now() - existing.updatedAt < ttlMs;
+        Boolean(existing.liveSession) &&
+        existing.tick === refreshTick &&
+        Date.now() - existing.updatedAt < ttlMs;
       if (isFresh) {
         return () => {
           subs?.delete(syncFromCache);
