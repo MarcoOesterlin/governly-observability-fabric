@@ -306,12 +306,72 @@ def upsert_compute_notebook(
     return str(body.get("id") or "")
 
 
+def ensure_small_spark_pool(workspace_id: str, token: str) -> None:
+    """Ensure workspace default Spark pool uses Small nodes so scheduled runs succeed on F2 capacities."""
+    try:
+        st_code, settings, _ = fabric_request(
+            "GET",
+            f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/spark/settings",
+            token,
+        )
+        default_pool = (settings or {}).get("pool", {}).get("defaultPool", {})
+        if st_code == 200 and default_pool.get("id") and default_pool.get("id") != "00000000-0000-0000-0000-000000000000":
+            return
+        pool_name = "GovernlySmallPool"
+        _, pools_resp, _ = fabric_request(
+            "GET",
+            f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/spark/pools",
+            token,
+        )
+        small_pool = next(
+            (
+                p
+                for p in (pools_resp or {}).get("value", [])
+                if p.get("name") == pool_name or str(p.get("nodeSize") or "").lower() == "small"
+            ),
+            None,
+        )
+        if not small_pool:
+            _, created_pool, _ = fabric_request(
+                "POST",
+                f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/spark/pools",
+                token,
+                {
+                    "name": pool_name,
+                    "nodeFamily": "MemoryOptimized",
+                    "nodeSize": "Small",
+                    "autoScale": {"enabled": True, "minNodeCount": 1, "maxNodeCount": 1},
+                    "dynamicExecutorAllocation": {"enabled": False},
+                },
+            )
+            small_pool = created_pool
+        if small_pool and small_pool.get("name"):
+            fabric_request(
+                "PATCH",
+                f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}/spark/settings",
+                token,
+                {
+                    "pool": {
+                        "starterPool": {"maxNodeCount": 1, "maxExecutors": 1},
+                        "defaultPool": {
+                            "name": small_pool["name"],
+                            "type": "Workspace",
+                            "id": small_pool.get("id"),
+                        },
+                    }
+                },
+            )
+    except Exception:
+        pass
+
+
 def ensure_notebook_schedule(
     workspace_id: str,
     notebook_id: str,
     token: str,
     interval_minutes: int = 36,
 ) -> None:
+    ensure_small_spark_pool(workspace_id, token)
     sched_url = (
         f"https://api.fabric.microsoft.com/v1/workspaces/{workspace_id}"
         f"/items/{notebook_id}/jobs/RunNotebook/schedules"

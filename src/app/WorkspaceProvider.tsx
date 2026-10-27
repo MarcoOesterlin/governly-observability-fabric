@@ -7,6 +7,7 @@ import {
   loadCachedAllWorkspaces,
   loadLocalComputeConfig,
   saveCachedAllWorkspaces,
+  saveLocalComputeConfig,
 } from "../data/useComputeConfig";
 
 export interface WorkspaceOption {
@@ -88,10 +89,14 @@ export function WorkspaceProvider({
   const [excludedIds, setExcludedIds] = useState<string[]>(
     () => loadLocalComputeConfig().excludedWorkspaceIds
   );
-  const [localHasScan, setLocalHasScan] = useState<boolean>(
-    () => initialOptions !== undefined || loadLocalComputeConfig().hasCompletedScan
+  const [localHasScan, setLocalHasScan] = useState<boolean>(() => {
+    if (initialOptions !== undefined) return true;
+    const cfg = loadLocalComputeConfig();
+    return cfg.hasCompletedScan || cfg.scheduleEnabled || loadCachedAllWorkspaces().length > 0;
+  });
+  const [dbHasScan, setDbHasScan] = useState<boolean>(
+    () => initialOptions !== undefined || loadCachedAllWorkspaces().length > 0
   );
-  const [dbHasScan, setDbHasScan] = useState<boolean>(initialOptions !== undefined);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
@@ -99,12 +104,15 @@ export function WorkspaceProvider({
     const onSync = () => {
       const cfg = loadLocalComputeConfig();
       setExcludedIds(cfg.excludedWorkspaceIds);
-      if (cfg.hasCompletedScan) setLocalHasScan(true);
+      if (cfg.hasCompletedScan || cfg.scheduleEnabled) setLocalHasScan(true);
     };
     const onAllWs = () => {
       if (initialOptions === undefined) {
         const cached = loadCachedAllWorkspaces();
-        if (cached.length > 0) setLiveWorkspaces(cached);
+        if (cached.length > 0) {
+          setLiveWorkspaces(cached);
+          setDbHasScan(true);
+        }
       }
     };
     window.addEventListener(COMPUTE_CONFIG_EVENT, onSync);
@@ -125,7 +133,8 @@ export function WorkspaceProvider({
     return filtered.length > 0 ? filtered : rawWorkspaces;
   }, [rawWorkspaces, excludedIds, initialOptions]);
 
-  const hasCompletedScan = initialOptions !== undefined || localHasScan || dbHasScan;
+  const hasCompletedScan =
+    initialOptions !== undefined || localHasScan || dbHasScan || activeWorkspaces.length > 0;
 
   const refreshData = useCallback(() => {
     setRefreshTick((t) => t + 1);
@@ -211,6 +220,11 @@ export function WorkspaceProvider({
         const mergedAll = mapped.length > 0 ? saveCachedAllWorkspaces(mapped) : loadCachedAllWorkspaces();
         if (mapped.length > 0) {
           setDbHasScan(true);
+          setLocalHasScan(true);
+          const curCfg = loadLocalComputeConfig();
+          if (!curCfg.hasCompletedScan) {
+            saveLocalComputeConfig({ ...curCfg, hasCompletedScan: true }, false);
+          }
         }
         const saved = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
         const next = selectInitialWorkspace(mergedAll, saved);

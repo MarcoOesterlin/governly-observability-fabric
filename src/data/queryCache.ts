@@ -39,7 +39,7 @@ function scheduleNotify(key: string, immediate = false): void {
   if (coalesceTimer === null) {
     coalesceTimer = setTimeout(() => {
       flushNotifications();
-    }, 650);
+    }, 50);
   }
 }
 
@@ -159,21 +159,19 @@ export function useCachedQuery<T>(
     if (!pending) {
       pending = fetcher()
         .then((res) => {
+          inflightMap.delete(key);
           writeEntry(key, res, refreshTick);
           return res;
         })
         .catch((err) => {
+          inflightMap.delete(key);
           const prior = readEntry<T>(key);
           if (!prior) {
             writeEntry(key, fallback, refreshTick);
-          }
-          throw err;
-        })
-        .finally(() => {
-          inflightMap.delete(key);
-          if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
+          } else if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
             flushNotifications();
           }
+          throw err;
         });
       inflightMap.set(key, pending);
     }

@@ -12,7 +12,9 @@ APP_SQL_DATABASE = "governly-730f1186-45e9-4ad0-862c-ad1d3e9b0204"
 from datetime import datetime, timedelta, timezone
 import json
 import struct
+import time
 from typing import Any
+import urllib.error
 import urllib.request
 import uuid
 
@@ -440,8 +442,33 @@ def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict], commit
             jdbc_conn.commit()
         return 0
 
+    # Deduplicate by primary key `id` to prevent PK constraint violations
+    if "id" in rows[0]:
+        deduped: dict[str, dict] = {}
+        for r in rows:
+            rid = str(r.get("id") or "")
+            deduped[rid] = r
+        rows = list(deduped.values())
+
     cols = list(rows[0].keys())
     col_list = ", ".join(f"[{c}]" for c in cols)
+
+    # Read column max lengths from SQL Server metadata to prevent string truncation errors
+    col_max_len: dict[str, int] = {}
+    meta_stmt = jdbc_conn.createStatement()
+    try:
+        rs_meta = meta_stmt.executeQuery(f"SELECT TOP 0 {col_list} FROM [dbo].[{sql_table}]")
+        md = rs_meta.getMetaData()
+        for idx, c in enumerate(cols, start=1):
+            prec = int(md.getPrecision(idx) or 0)
+            if 0 < prec < 8000:
+                col_max_len[c] = prec
+        rs_meta.close()
+    except Exception:
+        pass
+    finally:
+        meta_stmt.close()
+
     placeholders = ", ".join(["?"] * len(cols))
     ps = jdbc_conn.prepareStatement(f"INSERT INTO [dbo].[{sql_table}] ({col_list}) VALUES ({placeholders})")
     try:
@@ -457,7 +484,11 @@ def replace_table_rows_jdbc(jdbc_conn: Any, table: str, rows: list[dict], commit
                 elif isinstance(val, float):
                     ps.setDouble(idx, float(val))
                 else:
-                    ps.setString(idx, str(val))
+                    s_val = str(val)
+                    max_l = col_max_len.get(c)
+                    if max_l and len(s_val) > max_l:
+                        s_val = s_val[:max_l]
+                    ps.setString(idx, s_val)
             ps.addBatch()
         ps.executeBatch()
     finally:
@@ -488,9 +519,17 @@ def open_fabric_sql_jdbc(spark: Any, server: str, database: str, token: str) -> 
 
 
 def _fabric_api_get(url: str, token: str) -> dict:
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in range(4):
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < 3:
+                retry_after = int(exc.headers.get("Retry-After") or (2 ** (attempt + 1)))
+                time.sleep(min(retry_after, 15))
+                continue
+            raise
 
 
 INTERNAL_STAGING_TABLES = {
@@ -800,7 +839,7 @@ def _profile_fabric_item_jobs(
         run_status = "succeeded" if j_stat == "completed" and step_lag <= sla_min else "breach"
         item_runs.append({
             "workspace_id": wid,
-            "run_id": f"{asset_key}:{j.get('id') or idx}",
+            "run_id": f"{asset_key[:26]}:{j.get('id') or idx}"[:64],
             "asset_key": asset_key,
             "ended_at": j_iso,
             "lag_minutes": step_lag,
@@ -1030,6 +1069,8 @@ def discover_and_profile_live_fabric(
     for w in workspaces:
         wid = w["workspace_id"]
         scan_data_assets = bool(w.get("is_monitored", True)) and not bool(w.get("is_host_ws", False))
+        if not scan_data_assets:
+            continue
         ws_steward_id = next(
             (a["object_id"] for a in access_rows if a["workspace_id"] == wid),
             default_steward_id,
@@ -1047,26 +1088,28 @@ def discover_and_profile_live_fabric(
         lakehouses = [
             i
             for i in items
-            if scan_data_assets
-            and i.get("type") == "Lakehouse"
+            if i.get("type") == "Lakehouse"
             and not str(i.get("displayName") or "").endswith("_Staging")
             and str(i.get("displayName") or "") != "lh_governly"
         ]
         models = [
             i
             for i in items
-            if scan_data_assets
-            and i.get("type") == "SemanticModel"
+            if i.get("type") == "SemanticModel"
             and not str(i.get("displayName") or "").endswith("_Staging")
         ]
-        reports = [i for i in items if scan_data_assets and i.get("type") == "Report"]
-        # Always profile DataPipeline and Notebook runs across ALL workspaces (including host and excluded workspaces)
+        reports = [i for i in items if i.get("type") == "Report"]
         pipelines = [i for i in items if i.get("type") == "DataPipeline"]
-        notebooks = [i for i in items if i.get("type") == "Notebook"]
+        notebooks = [
+            i
+            for i in items
+            if i.get("type") == "Notebook"
+            and not str(i.get("displayName") or "").startswith("nb_governly_")
+        ]
         ai_items = [
             i
             for i in items
-            if scan_data_assets and i.get("type") in ("MLModel", "MLExperiment")
+            if i.get("type") in ("MLModel", "MLExperiment")
         ]
 
         ws_domains_seen: dict[str, str] = {}
@@ -1409,7 +1452,7 @@ def discover_and_profile_live_fabric(
                                 n_pct = round((n_cnt / row_count) * 100.0, 2)
                                 quality.append({
                                     "workspace_id": wid,
-                                    "monitor_key": f"{asset_key}:knull_{kc}"[:64],
+                                    "monitor_key": f"{asset_key[:40]}:knull_{kc[:16]}"[:64],
                                     "asset_key": asset_key,
                                     "rule_name": f"Key Null Rate ({kc})"[:64],
                                     "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],

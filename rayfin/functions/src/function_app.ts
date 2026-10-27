@@ -127,6 +127,59 @@ async function findComputeNotebook(
   return null;
 }
 
+async function ensureSmallSparkPool(workspaceId: string, token: string): Promise<void> {
+  try {
+    const authHeader = ['Bearer', token].join(' ');
+    const settingsRes = await fetch(`${FABRIC_API}/workspaces/${workspaceId}/spark/settings`, {
+      headers: { Authorization: authHeader },
+    });
+    if (settingsRes.ok) {
+      const settings = (await settingsRes.json()) as {
+        pool?: { defaultPool?: { id?: string; name?: string } };
+      };
+      const defPool = settings.pool?.defaultPool;
+      if (defPool?.id && defPool.id !== '00000000-0000-0000-0000-000000000000') {
+        return;
+      }
+    }
+    const poolsRes = await fetch(`${FABRIC_API}/workspaces/${workspaceId}/spark/pools`, {
+      headers: { Authorization: authHeader },
+    });
+    let smallPoolExists = false;
+    if (poolsRes.ok) {
+      const pools = (await poolsRes.json()) as {
+        value?: Array<{ name?: string; nodeSize?: string }>;
+      };
+      smallPoolExists = (pools.value ?? []).some((p) => p.name === 'GovernlySmallPool');
+    }
+    if (!smallPoolExists) {
+      await fetch(`${FABRIC_API}/workspaces/${workspaceId}/spark/pools`, {
+        method: 'POST',
+        headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'GovernlySmallPool',
+          nodeFamily: 'MemoryOptimized',
+          nodeSize: 'Small',
+          autoScale: { enabled: true, minNodeCount: 1, maxNodeCount: 1 },
+          dynamicExecutorAllocation: { enabled: false, minExecutors: 1, maxExecutors: 1 },
+        }),
+      });
+    }
+    await fetch(`${FABRIC_API}/workspaces/${workspaceId}/spark/settings`, {
+      method: 'PATCH',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pool: {
+          customizeComputeEnabled: true,
+          defaultPool: { name: 'GovernlySmallPool', type: 'Workspace' },
+        },
+      }),
+    });
+  } catch {
+    // non-fatal best-effort for F2 capacities
+  }
+}
+
 udf.func(
   'manageComputeNotebook',
   async (
@@ -152,6 +205,7 @@ udf.func(
     };
 
     if (action === 'trigger') {
+      await ensureSmallSparkPool(workspaceId, token);
       const trigRes = await fetch(
         `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/instances?jobType=RunNotebook`,
         {
@@ -179,6 +233,7 @@ udf.func(
     }
 
     if (action === 'schedule') {
+      await ensureSmallSparkPool(workspaceId, token);
       const clampedInterval = Math.max(1, Math.min(1440, Math.round(intervalMinutes || 36)));
       const now = new Date();
       const startIso = new Date(now.getTime() + clampedInterval * 60_000)
@@ -299,7 +354,7 @@ udf.func(
       }));
 
     let jobsJson: string | undefined;
-    if (action === 'jobs' || action === 'status') {
+    if (action === 'jobs') {
       const nowMs = Date.now();
       const perWsItems = await Promise.all(
         allCapacityWorkspaces.map(async (ws) => {

@@ -383,8 +383,13 @@ export function useComputeConfig() {
             const parsed = normalizeComputeConfig(
               JSON.parse(String(unifiedRow.expression)) as Partial<ComputeConfigState>,
             );
+            const mergedScan =
+              parsed.hasCompletedScan ||
+              local.hasCompletedScan ||
+              parsed.scheduleEnabled ||
+              loadCachedAllWorkspaces().length > 0;
             if (parsed.updatedAt >= local.updatedAt) {
-              saveLocalComputeConfig(parsed, false);
+              saveLocalComputeConfig({ ...parsed, hasCompletedScan: mergedScan }, false);
               saveSyncedExcludedIds(parsed.excludedWorkspaceIds);
             }
             return;
@@ -491,6 +496,10 @@ export function useComputeConfig() {
               saveLocalComputeConfig(
                 {
                   ...local,
+                  hasCompletedScan:
+                    local.hasCompletedScan ||
+                    Boolean(res.scheduleEnabled) ||
+                    loadCachedAllWorkspaces().length > 0,
                   scheduleEnabled: Boolean(res.scheduleEnabled),
                   intervalMinutes:
                     res.intervalMinutes && res.intervalMinutes > 0
@@ -501,6 +510,29 @@ export function useComputeConfig() {
               );
             }
           }
+          // Fetch live runtime jobs asynchronously in background without blocking status UI
+          void client.functions.manageComputeNotebook
+            .invoke({
+              hostWorkspaceId: hostWsId,
+              action: 'jobs',
+              scheduleEnabled: false,
+              intervalMinutes: DEFAULT_COMPUTE_CADENCE_MINUTES,
+            })
+            .then((jobsRes) => {
+              if (cancelled || !jobsRes?.ok) return;
+              const bgJobsJson = (jobsRes as unknown as { jobsJson?: string }).jobsJson;
+              if (bgJobsJson) {
+                try {
+                  const parsedJobs = JSON.parse(bgJobsJson) as LiveRuntimeJobItem[];
+                  if (Array.isArray(parsedJobs)) {
+                    saveCachedRuntimeJobs(parsedJobs);
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            })
+            .catch(() => undefined);
         }
       } catch {
         // Functions endpoint optional in unit tests / offline mode

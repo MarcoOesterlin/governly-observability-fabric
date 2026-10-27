@@ -67,8 +67,28 @@ export function Sidebar({
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { selectedDomain, setSelectedDomain, casesEnabled, hasCompletedScan } = useWorkspace();
-  const { allRows, domains } = useAssets();
-  const canFilterDomains = hasCompletedScan && domains.length > 0 && allRows.length > 0;
+  const { allRows, domains: liveDomains } = useAssets();
+  const [cachedDomains, setCachedDomains] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = window.localStorage.getItem('governly:cached-domains:v1');
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    if (liveDomains.length > 0) {
+      setCachedDomains(liveDomains);
+      try {
+        window.localStorage.setItem('governly:cached-domains:v1', JSON.stringify(liveDomains));
+      } catch {
+        // ignore
+      }
+    }
+  }, [liveDomains]);
+  const domains = liveDomains.length > 0 ? liveDomains : cachedDomains;
+  const canFilterDomains = hasCompletedScan && domains.length > 0;
   const steward = useCurrentSteward();
   const [domainMenuOpen, setDomainMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
