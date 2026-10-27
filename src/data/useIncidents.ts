@@ -11,7 +11,13 @@ import { client } from "./client";
 import { toIncidentFixture } from "./mappers";
 import { useCachedQuery } from "./queryCache";
 import type { IncidentFilter } from "./queryKeys";
-import { CASE_STATUS_EVENT, loadLocalCaseStatuses } from "./useCaseActions";
+import {
+  CASE_STATUS_EVENT,
+  INCIDENT_STATUS_EVENT,
+  isCaseLinkedToIncident,
+  loadLocalCaseStatuses,
+  loadLocalIncidentStatuses,
+} from "./useCaseActions";
 
 function buildLiveTimeline(status: IncidentFixture["status"]): TimelineFixture[] {
   const base: TimelineFixture[] = [
@@ -35,8 +41,30 @@ const EMPTY_CASES: CaseFixture[] = [];
 
 export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
   const { workspaceId, refreshTick } = useWorkspace();
+  const [localCaseMap, setLocalCaseMap] = useState<Record<string, CaseFixture["status"]>>(
+    () => loadLocalCaseStatuses()
+  );
+  const [localIncMap, setLocalIncMap] = useState<Record<string, IncidentFixture["status"]>>(
+    () => loadLocalIncidentStatuses()
+  );
 
-  return useCachedQuery<IncidentFixture[]>(
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onSync = () => {
+      setLocalCaseMap(loadLocalCaseStatuses());
+      setLocalIncMap(loadLocalIncidentStatuses());
+    };
+    window.addEventListener(CASE_STATUS_EVENT, onSync);
+    window.addEventListener(INCIDENT_STATUS_EVENT, onSync);
+    window.addEventListener("storage", onSync);
+    return () => {
+      window.removeEventListener(CASE_STATUS_EVENT, onSync);
+      window.removeEventListener(INCIDENT_STATUS_EVENT, onSync);
+      window.removeEventListener("storage", onSync);
+    };
+  }, []);
+
+  const rows = useCachedQuery<IncidentFixture[]>(
     workspaceId ? `incidents:${workspaceId}` : null,
     async () => {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
@@ -63,27 +91,71 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
         "asset_key",
         "owner_name",
       ]);
-      const [pubRows, overlays, assetOwnerRows, entraUsers] = await Promise.all([
-        isAll
-          ? basePub.execute()
-          : basePub.where({ workspace_id: { eq: workspaceId! } }).execute(),
-        (isAll
-          ? baseOverlay.execute()
-          : baseOverlay.where({ workspace_id: { eq: workspaceId! } }).execute()
-        ).catch(() => []),
-        (isAll
-          ? baseAssetOwners.execute()
-          : baseAssetOwners.where({ workspace_id: { eq: workspaceId! } }).execute()
-        ).catch(() => []),
-        client.data.PubEntraUser.select(["display_name", "is_synthetic"])
-          .first(50)
-          .execute()
-          .catch(() => []),
+      const baseCases = client.data.StewardCase.select([
+        "id",
+        "case_key",
+        "title",
+        "status",
       ]);
+      const [pubRows, overlays, assetOwnerRows, entraUsers, caseRows, caseLinks] =
+        await Promise.all([
+          isAll
+            ? basePub.execute()
+            : basePub.where({ workspace_id: { eq: workspaceId! } }).execute(),
+          (isAll
+            ? baseOverlay.execute()
+            : baseOverlay.where({ workspace_id: { eq: workspaceId! } }).execute()
+          ).catch(() => []),
+          (isAll
+            ? baseAssetOwners.execute()
+            : baseAssetOwners.where({ workspace_id: { eq: workspaceId! } }).execute()
+          ).catch(() => []),
+          client.data.PubEntraUser.select(["display_name", "is_synthetic"])
+            .first(50)
+            .execute()
+            .catch(() => []),
+          (isAll
+            ? baseCases.execute()
+            : baseCases.where({ workspace_id: { eq: workspaceId! } }).execute()
+          ).catch(() => []),
+          client.data.CaseIncidentLink.select(["case.id", "incident_key"])
+            .execute()
+            .catch(() => []),
+        ]);
       if (!Array.isArray(pubRows) || pubRows.length === 0) return [];
       const stateByKey = new Map(
         (Array.isArray(overlays) ? overlays : []).map((o) => [o.incident_key, o])
       );
+      const linksByCaseId = new Map<string, string[]>();
+      if (Array.isArray(caseLinks)) {
+        for (const l of caseLinks) {
+          const cid = String(l.case?.id ?? "");
+          if (!cid) continue;
+          const list = linksByCaseId.get(cid) ?? [];
+          list.push(l.incident_key);
+          linksByCaseId.set(cid, list);
+        }
+      }
+      const latestCaseStatuses = loadLocalCaseStatuses();
+      const latestIncStatuses = loadLocalIncidentStatuses();
+      const normalizedCases = (Array.isArray(caseRows) ? caseRows : []).map((c) => {
+        const rawSt = String(c.status ?? "Open").toLowerCase();
+        const dbSt: CaseFixture["status"] =
+          rawSt === "closed" || rawSt === "done"
+            ? "Done"
+            : rawSt === "in progress"
+              ? "In progress"
+              : rawSt === "blocked"
+                ? "Blocked"
+                : "Open";
+        return {
+          key: String(c.case_key ?? ""),
+          title: String(c.title ?? ""),
+          status: latestCaseStatuses[String(c.case_key ?? "")] ?? dbSt,
+          incidentKeys: linksByCaseId.get(String(c.id ?? "")) ?? [],
+        };
+      });
+
       const ownerByAsset = new Map<string, string>();
       if (Array.isArray(assetOwnerRows)) {
         for (const a of assetOwnerRows) {
@@ -124,7 +196,7 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
             .join("")
             .slice(0, 2)
             .toUpperCase() || "ST";
-        return toIncidentFixture(
+        const baseInc = toIncidentFixture(
           {
             ...r,
             initials,
@@ -136,11 +208,37 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
           },
           st
         );
+        const linkedCases = normalizedCases.filter((c) =>
+          isCaseLinkedToIncident(c, baseInc)
+        );
+        const anyCaseDone = linkedCases.some((c) => c.status === "Done");
+        const effectiveStatus: IncidentFixture["status"] =
+          latestIncStatuses[baseInc.id] ??
+          (anyCaseDone ? "Resolved" : baseInc.status);
+        return {
+          ...baseInc,
+          status: effectiveStatus,
+        };
       });
     },
     EMPTY_INCIDENTS,
     refreshTick
   );
+
+  return rows.map((inc) => {
+    if (localIncMap[inc.id]) {
+      return { ...inc, status: localIncMap[inc.id] };
+    }
+    for (const [caseKey, caseStatus] of Object.entries(localCaseMap)) {
+      if (
+        caseStatus === "Done" &&
+        isCaseLinkedToIncident({ key: caseKey }, inc)
+      ) {
+        return { ...inc, status: "Resolved" };
+      }
+    }
+    return inc;
+  });
 }
 
 const EMPTY_LIVE_INCIDENT: IncidentFixture = {
@@ -245,14 +343,22 @@ export function useCases(): CaseFixture[] {
   const [localStatusMap, setLocalStatusMap] = useState<Record<string, CaseFixture["status"]>>(
     () => loadLocalCaseStatuses()
   );
+  const [localIncMap, setLocalIncMap] = useState<Record<string, IncidentFixture["status"]>>(
+    () => loadLocalIncidentStatuses()
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onSync = () => setLocalStatusMap(loadLocalCaseStatuses());
+    const onSync = () => {
+      setLocalStatusMap(loadLocalCaseStatuses());
+      setLocalIncMap(loadLocalIncidentStatuses());
+    };
     window.addEventListener(CASE_STATUS_EVENT, onSync);
+    window.addEventListener(INCIDENT_STATUS_EVENT, onSync);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener(CASE_STATUS_EVENT, onSync);
+      window.removeEventListener(INCIDENT_STATUS_EVENT, onSync);
       window.removeEventListener("storage", onSync);
     };
   }, []);
@@ -271,7 +377,16 @@ export function useCases(): CaseFixture[] {
         "owner_name",
         "due_date",
       ]);
-      const [rows, links, entraUsers] = await Promise.all([
+      const basePubIncs = client.data.PubIncident.select([
+        "incident_key",
+        "asset_key",
+        "auto_resolved_at",
+      ]);
+      const baseIncStates = client.data.IncidentState.select([
+        "incident_key",
+        "status",
+      ]);
+      const [rows, links, entraUsers, pubIncs, incStates] = await Promise.all([
         isAll
           ? baseCases.execute()
           : baseCases.where({ workspace_id: { eq: workspaceId! } }).execute(),
@@ -282,6 +397,14 @@ export function useCases(): CaseFixture[] {
           .first(50)
           .execute()
           .catch(() => []),
+        (isAll
+          ? basePubIncs.execute()
+          : basePubIncs.where({ workspace_id: { eq: workspaceId! } }).execute()
+        ).catch(() => []),
+        (isAll
+          ? baseIncStates.execute()
+          : baseIncStates.where({ workspace_id: { eq: workspaceId! } }).execute()
+        ).catch(() => []),
       ]);
       if (!Array.isArray(rows) || rows.length === 0) return [];
       const fallbackEntraName =
@@ -306,6 +429,17 @@ export function useCases(): CaseFixture[] {
           linksByCaseId.set(cid, list);
         }
       }
+      const incStateByKey = new Map<string, string>();
+      if (Array.isArray(incStates)) {
+        for (const st of incStates) {
+          if (st.incident_key && st.status) {
+            incStateByKey.set(st.incident_key, st.status);
+          }
+        }
+      }
+      const allPubIncs = Array.isArray(pubIncs) ? pubIncs : [];
+      const latestIncStatuses = loadLocalIncidentStatuses();
+
       return rows.map((r) => {
         const rawStatus = String(r.status ?? "Open");
         const mappedStatus: CaseFixture["status"] =
@@ -326,12 +460,38 @@ export function useCases(): CaseFixture[] {
           r.owner_name && r.owner_name !== "Workspace Steward"
             ? r.owner_name
             : fallbackEntraName;
+
+        const incSet = new Set<string>(linksByCaseId.get(String(r.id)) ?? []);
+        for (const pInc of allPubIncs) {
+          const ik = String(pInc.incident_key ?? "");
+          if (
+            ik &&
+            isCaseLinkedToIncident(
+              { key: r.case_key, title: r.title, incidentKeys: Array.from(incSet) },
+              { id: ik, asset: String(pInc.asset_key ?? "") }
+            )
+          ) {
+            incSet.add(ik);
+          }
+        }
+        const incidentKeys = Array.from(incSet);
+        const allIncsResolved =
+          incidentKeys.length > 0 &&
+          incidentKeys.every((ik) => {
+            const pInc = allPubIncs.find((p) => p.incident_key === ik);
+            const effSt =
+              latestIncStatuses[ik] ??
+              incStateByKey.get(ik) ??
+              (pInc?.auto_resolved_at ? "Resolved" : "Open");
+            return effSt === "Resolved";
+          });
+
         return {
           key: r.case_key,
           title: r.title,
           domain: r.domain_key,
           priority: (r.priority as CaseFixture["priority"]) ?? "Medium",
-          status: mappedStatus,
+          status: allIncsResolved ? "Done" : mappedStatus,
           owner: ownerName,
           ownerInitials:
             ownerName
@@ -341,7 +501,7 @@ export function useCases(): CaseFixture[] {
               .slice(0, 2)
               .toUpperCase() || "ST",
           dueInDays,
-          incidentKeys: linksByCaseId.get(String(r.id)) ?? [],
+          incidentKeys,
         };
       });
     },
@@ -349,7 +509,16 @@ export function useCases(): CaseFixture[] {
     refreshTick
   );
 
-  return rows.map((c) =>
-    localStatusMap[c.key] ? { ...c, status: localStatusMap[c.key] } : c
-  );
+  return rows.map((c) => {
+    if (localStatusMap[c.key]) {
+      return { ...c, status: localStatusMap[c.key] };
+    }
+    if (
+      c.incidentKeys.length > 0 &&
+      c.incidentKeys.every((ik) => localIncMap[ik] === "Resolved")
+    ) {
+      return { ...c, status: "Done" };
+    }
+    return c;
+  });
 }

@@ -7,6 +7,7 @@ import { Timeline } from '../components/governly/Timeline';
 import { CommentThread } from '../components/governly/CommentThread';
 import { client } from '../data/client';
 import { invalidateQueryCache } from '../data/queryCache';
+import { syncCaseStatusFromIncident } from '../data/useCaseActions';
 import { useCurrentSteward } from '../data/useCurrentSteward';
 import { useIncidentDetailData } from '../data/useIncidents';
 import type {
@@ -198,6 +199,21 @@ export function IncidentDetail({
   const advanceStatus = (next: IncidentFixture['status']) => {
     setLocalStatus(next);
     onTransition?.(next);
+    if (!propIncident) {
+      const targetWs = resolveWriteWorkspaceId();
+      void syncCaseStatusFromIncident({
+        workspaceId: targetWs,
+        incidentKey: baseInc.id,
+        assetKey: baseInc.asset,
+        nextIncidentStatus: next,
+        onUpdated: refreshData,
+      });
+    }
+    if (next === 'Resolved') {
+      setActionToast('Incident resolved & linked case moved to Done');
+    } else if (next === 'Open') {
+      setActionToast('Incident & linked case reopened');
+    }
     void persistIncidentOverlay(next);
   };
 
@@ -428,6 +444,18 @@ export function IncidentDetail({
                 <i className={`ph ${primaryAction.icon}`} style={css('font-size:16px;')} aria-hidden="true" />
                 {primaryAction.label}
               </button>
+              {incStatus !== 'Resolved' && primaryAction.next !== 'Resolved' && (
+                <button
+                  type="button"
+                  onClick={() => advanceStatus('Resolved')}
+                  style={css(
+                    'height:38px;border-radius:9px;border:1px solid var(--ok,#059669);background:var(--okb,#ecfdf5);color:var(--ok,#059669);font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;width:100%'
+                  )}
+                >
+                  <i className="ph ph-check-circle" style={css('font-size:16px;')} aria-hidden="true" />
+                  Resolve incident & close case
+                </button>
+              )}
               <button type="button" onClick={handleAssignToMe} style={css(secBtn)}>
                 <i className="ph ph-user-plus" style={css('font-size:16px;')} aria-hidden="true" />
                 Assign to me

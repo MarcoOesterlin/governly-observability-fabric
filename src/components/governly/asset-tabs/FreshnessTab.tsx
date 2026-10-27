@@ -272,6 +272,26 @@ export function resolveActivityImpact(
   };
 }
 
+export function cleanFailureMessage(raw: string): string {
+  if (!raw) return '';
+  let cleaned = raw.trim();
+  // Extract core Exception value when Fabric wraps the same message twice
+  const errValMatch = cleaned.match(/Error value\s*-\s*([^']+)/i);
+  if (errValMatch && errValMatch[1]) {
+    const inner = errValMatch[1].replace(/\s*:\s*$/, '').trim();
+    const prefixMatch = cleaned.match(/^(Spark notebook|Data pipeline)\s+'[^']+'\s+failed with\s+\[[^\]]+\]:/i);
+    if (prefixMatch && inner.length > 15) {
+      cleaned = `${prefixMatch[0]} ${inner}`;
+    }
+  }
+  // Remove duplicated " — Notebook execution failed..." if already present in the first half
+  const parts = cleaned.split(/\s+—\s+/);
+  if (parts.length === 2 && parts[0].toLowerCase().includes(parts[1].slice(0, 32).toLowerCase())) {
+    cleaned = parts[0];
+  }
+  return cleaned;
+}
+
 export function buildFallbackJobDiagnostic(
   assetName: string,
   assetType: string,
@@ -386,6 +406,7 @@ export function FreshnessTab({
     saving: landingSaving,
   } = useExpectedLandingTimes();
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [diagExpanded, setDiagExpanded] = useState<boolean>(false);
   const runs = propRuns ?? liveRuns;
   const slaMin = asset.slaMinutes ?? 60;
   const { points, lastY } = buildLagPolyline(lagPoints, slaMin);
@@ -708,50 +729,88 @@ export function FreshnessTab({
 
       {activeDiagnostics.length > 0 && (
         <div style={css('background:var(--card,#fff);border:1px solid var(--crit,#dc2626);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
-          <div style={css('padding:14px 18px;background:var(--critb,#fef2f2);border-bottom:1px solid var(--border,#e7e7ea);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;')}>
-            <div style={css('display:flex;align-items:center;gap:8px;')}>
-              <i className="ph ph-warning-octagon" style={css('font-size:17px;color:var(--crit,#dc2626);')} aria-hidden="true" />
-              <span style={css('font-size:14px;font-weight:600;color:var(--fg);')}>
-                Run Failure Diagnostics &amp; Possible Solution ({asset.name})
-              </span>
-            </div>
-            {asset.fabricItemUrl && (
-              <button
-                type="button"
-                onClick={() => window.open(asset.fabricItemUrl!, '_blank', 'noopener,noreferrer')}
-                style={css('height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;')}
-              >
-                <i className="ph ph-arrow-square-out" aria-hidden="true" />
-                Open in Fabric Workspace
-              </button>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setDiagExpanded((prev) => !prev)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setDiagExpanded((prev) => !prev);
+              }
+            }}
+            style={css(
+              `padding:12px 18px;background:var(--critb,#fef2f2);border-bottom:${
+                diagExpanded ? '1px solid var(--border,#e7e7ea)' : 'none'
+              };display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;cursor:pointer;`,
             )}
-          </div>
-          {activeDiagnostics.map((diag) => (
-            <div key={diag.id} style={css('padding:16px 18px;border-bottom:1px solid var(--border,#e7e7ea);display:flex;flex-direction:column;gap:10px;')}>
-              <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
-                <span style={badge('var(--crit)', 'var(--critb)')}>{diag.statusLabel}</span>
-                <span style={css("font-size:11.5px;font-family:'Geist Mono',monospace;color:var(--fgm);")}>
-                  {diag.errorCode} · {diag.assetType}
+          >
+            <div style={css('display:flex;align-items:center;gap:8px;min-width:0;flex:1;')}>
+              <i
+                className={`ph ${diagExpanded ? 'ph-caret-down' : 'ph-caret-right'}`}
+                style={css('font-size:14px;color:var(--crit,#dc2626);')}
+                aria-hidden="true"
+              />
+              <i className="ph ph-warning-octagon" style={css('font-size:17px;color:var(--crit,#dc2626);')} aria-hidden="true" />
+              <span style={css('font-size:13.5px;font-weight:600;color:var(--fg);')}>
+                Run Failure Diagnostics &amp; Blast Radius ({asset.name})
+              </span>
+              {!diagExpanded && activeDiagnostics[0] && (
+                <span
+                  style={css(
+                    'font-size:12px;color:var(--crit,#dc2626);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px;',
+                  )}
+                >
+                  — {cleanFailureMessage(activeDiagnostics[0].whyFailed)}
                 </span>
-              </div>
-              <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:14px;')}>
-                <div style={css('padding:12px 14px;border-radius:8px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);')}>
-                  <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--crit,#dc2626);margin-bottom:5px;')}>
-                    Why It Failed
+              )}
+            </div>
+            <div style={css('display:flex;align-items:center;gap:8px;')}>
+              <span style={css('font-size:11.5px;font-weight:600;color:var(--crit,#dc2626);')}>
+                {diagExpanded ? 'Hide failure details' : 'Click to expand failure & affected objects'}
+              </span>
+              {asset.fabricItemUrl && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    window.open(asset.fabricItemUrl!, '_blank', 'noopener,noreferrer');
+                  }}
+                  style={css('height:26px;padding:0 10px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:5px;')}
+                >
+                  <i className="ph ph-arrow-square-out" aria-hidden="true" />
+                  Open in Fabric
+                </button>
+              )}
+            </div>
+          </div>
+          {diagExpanded &&
+            activeDiagnostics.map((diag) => (
+              <div key={diag.id} style={css('padding:16px 18px;border-bottom:1px solid var(--border,#e7e7ea);display:flex;flex-direction:column;gap:10px;')}>
+                <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+                  <span style={badge('var(--crit)', 'var(--critb)')}>{diag.statusLabel}</span>
+                  <span style={css("font-size:11.5px;font-family:'Geist Mono',monospace;color:var(--fgm);")}>
+                    {diag.errorCode} · {diag.assetType}
+                  </span>
+                </div>
+                <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:14px;')}>
+                  <div style={css('padding:12px 14px;border-radius:8px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);')}>
+                    <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--crit,#dc2626);margin-bottom:5px;')}>
+                      Why It Failed
+                    </div>
+                    <div style={css('font-size:12.5px;color:var(--fg);line-height:1.5;')}>
+                      {cleanFailureMessage(diag.whyFailed)}
+                    </div>
                   </div>
-                  <div style={css('font-size:12.5px;color:var(--fg);line-height:1.5;')}>
-                    {diag.whyFailed}
+                  <div style={css('padding:12px 14px;border-radius:8px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);')}>
+                    <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--ok,#16a34a);margin-bottom:5px;')}>
+                      Possible Solution
+                    </div>
+                    <div style={css('font-size:12.5px;color:var(--fg);line-height:1.5;white-space:pre-line;')}>
+                      {diag.possibleSolution}
+                    </div>
                   </div>
                 </div>
-                <div style={css('padding:12px 14px;border-radius:8px;background:var(--card2,#f4f4f6);border:1px solid var(--border,#e7e7ea);')}>
-                  <div style={css('font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--ok,#16a34a);margin-bottom:5px;')}>
-                    Possible Solution
-                  </div>
-                  <div style={css('font-size:12.5px;color:var(--fg);line-height:1.5;white-space:pre-line;')}>
-                    {diag.possibleSolution}
-                  </div>
-                </div>
-              </div>
 
               {(impact.upstream.length > 0 || impact.downstream.length > 0) && (
                 <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:14px;padding-top:4px;')}>

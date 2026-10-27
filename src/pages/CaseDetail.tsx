@@ -5,7 +5,7 @@ import { Box } from '../components/governly/Box';
 import { badge, sevPair } from '../components/governly/primitives';
 import { CommentThread } from '../components/governly/CommentThread';
 import { client } from '../data/client';
-import { updateStewardCaseStatus } from '../data/useCaseActions';
+import { isCaseLinkedToIncident, updateStewardCaseStatus } from '../data/useCaseActions';
 import { useCurrentSteward } from '../data/useCurrentSteward';
 import { useCases, useIncidents } from '../data/useIncidents';
 import type { CaseFixture, CommentFixture } from '../fixtures/types';
@@ -38,7 +38,7 @@ export function CaseDetail() {
     };
   const effectiveStatus = localStatus ?? c.status;
   const sv = sevPair(c.priority);
-  const linked = incidents.filter((i) => c.incidentKeys.includes(i.id));
+  const linked = incidents.filter((i) => isCaseLinkedToIncident(c, i));
 
   useEffect(() => {
     if (!c.key || c.key === 'CASE-NONE') return;
@@ -86,7 +86,12 @@ export function CaseDetail() {
       ...prev,
       { who, initials, time: timeLbl, text: statusNote, system: true },
     ]);
-    void updateStewardCaseStatus(c.key, nextStatus, refreshData);
+    void updateStewardCaseStatus(
+      c.key,
+      nextStatus,
+      refreshData,
+      linked.map((i) => i.id)
+    );
     void client.data.IncidentComment.create({
       workspace_id: resolveWriteWorkspaceId(),
       incident_key: c.key,

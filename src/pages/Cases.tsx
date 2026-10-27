@@ -28,7 +28,7 @@ export function Cases({ cases: propCases }: { cases?: CaseFixture[] } = {}) {
     const current = cases.find((c) => c.key === caseKey);
     if (!current || current.status === nextStatus) return;
     setStatusOverrides((prev) => ({ ...prev, [caseKey]: nextStatus }));
-    void updateStewardCaseStatus(caseKey, nextStatus, refreshData);
+    void updateStewardCaseStatus(caseKey, nextStatus, refreshData, current.incidentKeys);
   };
 
   if (!casesEnabled) {

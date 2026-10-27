@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   buildFallbackJobDiagnostic,
+  cleanFailureMessage,
   FreshnessTab,
   resolveActivityImpact,
 } from '../components/governly/asset-tabs/FreshnessTab';
@@ -17,7 +18,7 @@ import {
 import { useIncidents } from '../data/useIncidents';
 import { css } from '../lib/css';
 
-type RuntimeTypeFilter = 'all' | 'notebooks' | 'pipelines' | 'models' | 'tables';
+type RuntimeTypeFilter = 'workloads' | 'notebooks' | 'pipelines' | 'tables' | 'models' | 'all';
 type RuntimeStatusFilter = 'all' | 'breach' | 'healthy';
 
 export function Freshness() {
@@ -31,42 +32,65 @@ export function Freshness() {
   const allJobDiagnostics = useJobFailureDiagnostics();
   const allIncidents = useIncidents();
 
-  const [typeFilter, setTypeFilter] = useState<RuntimeTypeFilter>('all');
+  const [typeFilter, setTypeFilter] = useState<RuntimeTypeFilter>('workloads');
   const [statusFilter, setStatusFilter] = useState<RuntimeStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedJobIds, setExpandedJobIds] = useState<Record<string, boolean>>({});
+
+  const toggleJobExpand = (jobId: string) => {
+    setExpandedJobIds((prev) => ({ ...prev, [jobId]: !prev[jobId] }));
+  };
 
   const pipelineAndNotebookAssets = assets.filter(
     (a) => a.type === 'Data pipeline' || a.type === 'Spark notebook',
   );
+  const isWorkloadScope =
+    typeFilter === 'workloads' || typeFilter === 'notebooks' || typeFilter === 'pipelines';
+  const inspectableItems =
+    isWorkloadScope && pipelineAndNotebookAssets.length > 0
+      ? pipelineAndNotebookAssets
+      : assets;
+
   const firstFailingAsset =
-    pipelineAndNotebookAssets.find(
+    inspectableItems.find(
       (a) => a.late || a.fresh.toLowerCase().includes('fail'),
     ) ??
-    assets.find((a) => a.late || a.fresh.toLowerCase().includes('fail')) ??
     pipelineAndNotebookAssets[0] ??
     assets[0];
 
   const [selectedAssetKey, setSelectedAssetKey] = useState<string>('');
   const targetAssetKey =
-    selectedAssetKey && assets.some((a) => a.name === selectedAssetKey)
+    selectedAssetKey && inspectableItems.some((a) => a.name === selectedAssetKey)
       ? selectedAssetKey
       : (firstFailingAsset?.name ?? '');
 
-  const onTimeCount = assets.filter(
+  const kpiScopeItems =
+    pipelineAndNotebookAssets.length > 0 ? pipelineAndNotebookAssets : assets;
+  const onTimeCount = kpiScopeItems.filter(
     (a) => !a.late && !a.fresh.toLowerCase().includes('fail'),
   ).length;
   const slaPct =
-    assets.length > 0 ? ((onTimeCount / assets.length) * 100).toFixed(1) : '100.0';
+    kpiScopeItems.length > 0
+      ? ((onTimeCount / kpiScopeItems.length) * 100).toFixed(1)
+      : '100.0';
 
   const counts = {
-    all: assets.length,
+    workloads: pipelineAndNotebookAssets.length,
     notebooks: assets.filter((a) => a.type === 'Spark notebook').length,
     pipelines: assets.filter((a) => a.type === 'Data pipeline').length,
-    models: assets.filter((a) => a.type === 'Semantic model').length,
     tables: assets.filter((a) => a.type === 'Lakehouse table').length,
+    models: assets.filter((a) => a.type === 'Semantic model').length,
+    all: assets.length,
   };
 
   const filteredRuntime = assets.filter((a) => {
+    if (
+      typeFilter === 'workloads' &&
+      a.type !== 'Spark notebook' &&
+      a.type !== 'Data pipeline'
+    ) {
+      return false;
+    }
     if (typeFilter === 'notebooks' && a.type !== 'Spark notebook') return false;
     if (typeFilter === 'pipelines' && a.type !== 'Data pipeline') return false;
     if (typeFilter === 'models' && a.type !== 'Semantic model') return false;
@@ -126,10 +150,10 @@ export function Freshness() {
           <div>
             <div style={css('font-size:22px;font-weight:600;letter-spacing:-0.02em;color:var(--fg,#18181b);')}>Pipelines &amp; Freshness</div>
             <div style={css('font-size:13.5px;color:var(--fgm,#52525b);margin-top:4px;')}>
-              {slaPct}% SLA compliance across {assets.length} runtime jobs, notebooks, pipelines, and tables across all workspaces ({onTimeCount} on time).
+              {slaPct}% SLA compliance across {kpiScopeItems.length} runtime workloads — Spark notebooks &amp; data pipelines ({onTimeCount} healthy).
             </div>
           </div>
-          {assets.length > 0 && (
+          {inspectableItems.length > 0 && (
             <div style={css('display:flex;align-items:center;gap:8px;')}>
               <label htmlFor="freshness-asset-select" style={css('font-size:12px;font-weight:600;color:var(--fgm);')}>
                 Inspect Runs for Item:
@@ -142,7 +166,7 @@ export function Freshness() {
                   'height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:13px;font-weight:500;',
                 )}
               >
-                {assets.map((a) => (
+                {inspectableItems.map((a) => (
                   <option key={a.name} value={a.name}>
                     {a.name} ({a.type} · {a.fresh})
                   </option>
@@ -156,10 +180,10 @@ export function Freshness() {
           <div style={css('display:flex;align-items:center;gap:6px;flex-wrap:wrap;')}>
             <button
               type="button"
-              onClick={() => setTypeFilter('all')}
-              style={pillStyle(typeFilter === 'all')}
+              onClick={() => setTypeFilter('workloads')}
+              style={pillStyle(typeFilter === 'workloads')}
             >
-              All Runtime ({counts.all})
+              Notebooks &amp; Pipelines ({counts.workloads})
             </button>
             <button
               type="button"
@@ -175,19 +199,22 @@ export function Freshness() {
             >
               Data Pipelines ({counts.pipelines})
             </button>
-            <button
-              type="button"
-              onClick={() => setTypeFilter('models')}
-              style={pillStyle(typeFilter === 'models')}
-            >
-              Semantic Models ({counts.models})
-            </button>
+            <span style={css('width:1px;height:18px;background:var(--border,#e7e7ea);margin:0 4px;')} aria-hidden="true" />
             <button
               type="button"
               onClick={() => setTypeFilter('tables')}
               style={pillStyle(typeFilter === 'tables')}
+              title="Inspect table landing freshness (Data Assets)"
             >
               Lakehouse Tables ({counts.tables})
+            </button>
+            <button
+              type="button"
+              onClick={() => setTypeFilter('models')}
+              style={pillStyle(typeFilter === 'models')}
+              title="Inspect semantic model refresh freshness (Data Assets)"
+            >
+              Semantic Models ({counts.models})
             </button>
           </div>
           <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
@@ -233,18 +260,18 @@ export function Freshness() {
                 Data Pipelines &amp; Spark Notebooks Execution Health (All Workspaces)
               </div>
               <div style={css('font-size:12px;color:var(--fgm);margin-top:2px;')}>
-                Includes all notebooks and pipelines across every workspace (including Governly host and excluded workspaces), with failure root cause and suggested solutions.
+                Click any failed or late row to expand its failure root cause, suggested fix, and upstream/downstream blast radius.
               </div>
             </div>
             <span style={badge('#4338ca', '#eef2ff')}>
-              {filteredJobs.length} runtime jobs
+              {filteredJobs.length} runtime workloads
             </span>
           </div>
-          <div style={css('display:grid;grid-template-columns:1.55fr 0.7fr 0.75fr 1.8fr 0.75fr;gap:12px;padding:9px 18px;font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fgs);border-bottom:1px solid var(--border,#e7e7ea);')}>
+          <div style={css('display:grid;grid-template-columns:1.55fr 0.75fr 0.7fr 1.65fr 0.95fr;gap:12px;padding:9px 18px;font-size:10.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:var(--fgs);border-bottom:1px solid var(--border,#e7e7ea);')}>
             <span>Pipeline / Notebook</span>
-            <span>Type &amp; Domain</span>
+            <span>Type &amp; Workspace</span>
             <span>Latest Run</span>
-            <span>Failure Reason &amp; Possible Solution</span>
+            <span>Execution Status &amp; Summary</span>
             <span style={css('text-align:right;')}>Action</span>
           </div>
           {filteredJobs.map((item) => {
@@ -262,90 +289,186 @@ export function Freshness() {
                   )
                 : null);
             const rowImpact = isBreach ? resolveActivityImpact(item, combinedCatalog) : null;
+            const hasDetails = Boolean(matchedDiag);
+            const isExpanded = Boolean(expandedJobIds[item.id]);
+            const cleanedWhy = matchedDiag ? cleanFailureMessage(matchedDiag.whyFailed) : '';
+            const totalAffected =
+              (rowImpact?.upstream.length ?? 0) + (rowImpact?.downstream.length ?? 0);
 
             return (
-              <div
-                key={item.id}
-                style={css(
-                  'display:grid;grid-template-columns:1.55fr 0.7fr 0.75fr 1.8fr 0.75fr;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);',
-                )}
-              >
-                <div style={css('display:flex;align-items:center;gap:8px;min-width:0;')}>
-                  <i className={`ph ${item.icon}`} style={css('font-size:16px;color:var(--fgm);')} aria-hidden="true" />
-                  <span style={css("font-size:13px;font-weight:600;color:var(--fg);font-family:'Geist Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;")}>
-                    {item.name}
-                  </span>
-                </div>
-                <div style={css('font-size:12px;color:var(--fgm);')}>
-                  <div>{item.type}</div>
-                  <div style={css('font-size:11px;color:var(--fgs);')}>{item.domain}</div>
-                </div>
-                <div>
-                  <span
-                    style={
-                      isBreach
-                        ? badge('var(--crit)', 'var(--critb)')
-                        : badge('var(--ok)', 'var(--okb)')
+              <div key={item.id} style={css('border-bottom:1px solid var(--border,#e7e7ea);')}>
+                <div
+                  role={hasDetails ? 'button' : undefined}
+                  tabIndex={hasDetails ? 0 : undefined}
+                  onClick={() => {
+                    if (hasDetails) toggleJobExpand(item.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (hasDetails && (e.key === 'Enter' || e.key === ' ')) {
+                      e.preventDefault();
+                      toggleJobExpand(item.id);
                     }
-                  >
-                    {isFailed ? 'Run Failed' : item.late ? `Late (${item.fresh})` : item.fresh}
-                  </span>
-                </div>
-                <div style={css('font-size:12px;color:var(--fgm);line-height:1.4;')}>
-                  {matchedDiag ? (
-                    <div style={css('display:flex;flex-direction:column;gap:4px;')}>
-                      <div style={css('color:var(--crit);font-weight:600;')}>
-                        Why: {matchedDiag.whyFailed}
-                      </div>
-                      <div style={css('color:var(--fgm);')}>
-                        Solution: {matchedDiag.possibleSolution.split('\n')[0]}
-                      </div>
-                      {rowImpact && (rowImpact.upstream.length > 0 || rowImpact.downstream.length > 0) && (
-                        <div style={css('display:flex;flex-wrap:wrap;gap:5px;margin-top:3px;')}>
-                          {rowImpact.upstream.slice(0, 2).map((u) => (
-                            <span
-                              key={`up-${u.name}`}
-                              onClick={() => {
-                                if (u.navigable) navigate(`/assets/${u.name}`);
-                              }}
-                              style={css(
-                                `font-size:11px;padding:2px 7px;border-radius:5px;background:var(--card2,#f4f4f6);color:var(--fgm);border:1px solid var(--border,#e7e7ea);font-family:'Geist Mono',monospace;cursor:${u.navigable ? 'pointer' : 'default'};`,
-                              )}
-                            >
-                              ↑ Upstream: {u.name}
-                            </span>
-                          ))}
-                          {rowImpact.downstream.slice(0, 4).map((d) => (
-                            <span
-                              key={`dn-${d.name}`}
-                              onClick={() => {
-                                if (d.navigable) navigate(`/assets/${d.name}`);
-                              }}
-                              style={css(
-                                `font-size:11px;padding:2px 7px;border-radius:5px;background:var(--critb,#fef2f2);color:var(--crit,#dc2626);border:1px solid var(--crit,#dc2626);font-family:'Geist Mono',monospace;font-weight:600;cursor:${d.navigable ? 'pointer' : 'default'};`,
-                              )}
-                            >
-                              ↓ Affects / Breaks: {d.name} ({d.type})
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <span style={css('color:var(--ok);')}>All recent runs succeeded within SLA</span>
+                  }}
+                  style={css(
+                    `display:grid;grid-template-columns:1.55fr 0.75fr 0.7fr 1.65fr 0.95fr;gap:12px;padding:11px 18px;align-items:center;cursor:${
+                      hasDetails ? 'pointer' : 'default'
+                    };background:${isExpanded ? 'var(--card2,#fafafa)' : 'transparent'};`,
                   )}
+                >
+                  <div style={css('display:flex;align-items:center;gap:8px;min-width:0;')}>
+                    <i
+                      className={`ph ${
+                        hasDetails
+                          ? isExpanded
+                            ? 'ph-caret-down'
+                            : 'ph-caret-right'
+                          : 'ph-check-circle'
+                      }`}
+                      style={css(
+                        `font-size:13px;color:${
+                          hasDetails ? 'var(--crit,#dc2626)' : 'var(--ok,#16a34a)'
+                        };flex:0 0 auto;`,
+                      )}
+                      aria-hidden="true"
+                    />
+                    <i className={`ph ${item.icon}`} style={css('font-size:16px;color:var(--fgm);flex:0 0 auto;')} aria-hidden="true" />
+                    <span style={css("font-size:13px;font-weight:600;color:var(--fg);font-family:'Geist Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;")}>
+                      {item.name}
+                    </span>
+                  </div>
+                  <div style={css('font-size:12px;color:var(--fgm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;')}>
+                    <span>{item.type}</span>
+                    <span style={css('font-size:11px;color:var(--fgs);margin-left:6px;')}>· {item.domain}</span>
+                  </div>
+                  <div>
+                    <span
+                      style={
+                        isBreach
+                          ? badge('var(--crit)', 'var(--critb)')
+                          : badge('var(--ok)', 'var(--okb)')
+                      }
+                    >
+                      {isFailed ? 'Run Failed' : item.late ? `Late (${item.fresh})` : item.fresh}
+                    </span>
+                  </div>
+                  <div style={css('font-size:12px;color:var(--fgm);min-width:0;display:flex;align-items:center;gap:8px;')}>
+                    {matchedDiag ? (
+                      <>
+                        <span
+                          style={css(
+                            'color:var(--crit);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;',
+                          )}
+                        >
+                          {cleanedWhy}
+                        </span>
+                        {totalAffected > 0 && (
+                          <span
+                            style={css(
+                              "font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--critb,#fef2f2);color:var(--crit,#dc2626);font-family:'Geist Mono',monospace;font-weight:600;white-space:nowrap;flex:0 0 auto;",
+                            )}
+                          >
+                            {rowImpact?.downstream.length ?? 0} affected
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span style={css('color:var(--ok);')}>All recent runs succeeded within SLA</span>
+                    )}
+                  </div>
+                  <div
+                    style={css('display:flex;align-items:center;justify-content:flex-end;gap:6px;')}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {hasDetails && (
+                      <button
+                        type="button"
+                        onClick={() => toggleJobExpand(item.id)}
+                        style={css(
+                          `height:27px;padding:0 9px;border-radius:6px;border:1px solid ${
+                            isExpanded ? 'var(--crit,#dc2626)' : 'var(--border,#e7e7ea)'
+                          };background:${
+                            isExpanded ? 'var(--critb,#fef2f2)' : 'var(--card,#fff)'
+                          };color:${
+                            isExpanded ? 'var(--crit,#dc2626)' : 'var(--fg)'
+                          };font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;`,
+                        )}
+                      >
+                        <i className={`ph ${isExpanded ? 'ph-caret-up' : 'ph-caret-down'}`} aria-hidden="true" />
+                        {isExpanded ? 'Hide Failure' : 'Failure Details'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedAssetKey(item.name)}
+                      style={css(
+                        'height:27px;padding:0 9px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;',
+                      )}
+                    >
+                      Inspect Runs
+                    </button>
+                  </div>
                 </div>
-                <div style={css('text-align:right;')}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedAssetKey(item.name)}
+
+                {hasDetails && isExpanded && matchedDiag && (
+                  <div
                     style={css(
-                      'height:28px;padding:0 10px;border-radius:6px;border:1px solid var(--border,#e7e7ea);background:var(--card,#fff);color:var(--fg);font-size:11.5px;font-weight:600;cursor:pointer;',
+                      'padding:12px 18px 14px 40px;background:var(--card2,#fafafa);border-top:1px dashed var(--border,#e7e7ea);display:flex;flex-direction:column;gap:10px;',
                     )}
                   >
-                    Inspect Runs
-                  </button>
-                </div>
+                    <div style={css('display:grid;grid-template-columns:1fr 1fr;gap:12px;')}>
+                      <div style={css('padding:10px 12px;border-radius:8px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);')}>
+                        <div style={css('font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--crit,#dc2626);margin-bottom:4px;')}>
+                          Why It Failed ({matchedDiag.errorCode})
+                        </div>
+                        <div style={css('font-size:12px;color:var(--fg);line-height:1.5;')}>
+                          {cleanedWhy}
+                        </div>
+                      </div>
+                      <div style={css('padding:10px 12px;border-radius:8px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);')}>
+                        <div style={css('font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--ok,#16a34a);margin-bottom:4px;')}>
+                          Suggested Solution
+                        </div>
+                        <div style={css('font-size:12px;color:var(--fg);line-height:1.5;white-space:pre-line;')}>
+                          {matchedDiag.possibleSolution}
+                        </div>
+                      </div>
+                    </div>
+
+                    {rowImpact && (rowImpact.upstream.length > 0 || rowImpact.downstream.length > 0) && (
+                      <div style={css('display:flex;flex-wrap:wrap;gap:6px;align-items:center;')}>
+                        <span style={css('font-size:11px;font-weight:600;color:var(--fgm);margin-right:4px;')}>
+                          Blast Radius:
+                        </span>
+                        {rowImpact.upstream.map((u) => (
+                          <span
+                            key={`up-${u.name}`}
+                            onClick={() => {
+                              if (u.navigable) navigate(`/assets/${u.name}`);
+                            }}
+                            style={css(
+                              `font-size:11px;padding:2px 7px;border-radius:5px;background:var(--card,#fff);color:var(--fgm);border:1px solid var(--border,#e7e7ea);font-family:'Geist Mono',monospace;cursor:${u.navigable ? 'pointer' : 'default'};`,
+                            )}
+                          >
+                            ↑ Upstream: {u.name}
+                          </span>
+                        ))}
+                        {rowImpact.downstream.map((d) => (
+                          <span
+                            key={`dn-${d.name}`}
+                            onClick={() => {
+                              if (d.navigable) navigate(`/assets/${d.name}`);
+                            }}
+                            style={css(
+                              `font-size:11px;padding:2px 7px;border-radius:5px;background:var(--critb,#fef2f2);color:var(--crit,#dc2626);border:1px solid var(--crit,#dc2626);font-family:'Geist Mono',monospace;font-weight:600;cursor:${d.navigable ? 'pointer' : 'default'};`,
+                            )}
+                          >
+                            ↓ Affects / Breaks: {d.name} ({d.type})
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
