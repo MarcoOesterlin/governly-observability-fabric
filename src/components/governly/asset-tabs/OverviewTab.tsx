@@ -225,23 +225,32 @@ export function OverviewTab({
 
       {isTableAsset && (
         <div style={css('background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;')}>
-          <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);font-size:14px;font-weight:600;color:var(--fg);')}>
-            Quality checks
+          <div style={css('padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);display:flex;align-items:center;justify-content:space-between;')}>
+            <span style={css('font-size:14px;font-weight:600;color:var(--fg);')}>Quality checks</span>
+            <span style={css('font-size:12px;color:var(--fgm);')}>
+              {qualityRules.length > 0 ? `${passCount} / ${qualityRules.length} passing` : 'N/A · 0 rules configured'}
+            </span>
           </div>
-          {qualityRules.map((q) => {
-            const r = RESULT[q.result];
-            return (
-              <div key={q.name} style={css('display:grid;grid-template-columns:24px 1.4fr 1.6fr 1fr 80px;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);')}>
-                <div style={css(`color:${r[1]};font-size:17px;display:flex;`)}>
-                  <i className={`ph ${r[0]}`} aria-hidden="true" />
+          {qualityRules.length === 0 ? (
+            <div style={css('padding:16px 18px;font-size:12.5px;color:var(--fgm);')}>
+              No data quality rules configured for this table — shows N/A until rules are added.
+            </div>
+          ) : (
+            qualityRules.map((q) => {
+              const r = RESULT[q.result];
+              return (
+                <div key={q.name} style={css('display:grid;grid-template-columns:24px 1.4fr 1.6fr 1fr 80px;gap:12px;padding:12px 18px;align-items:center;border-bottom:1px solid var(--border,#e7e7ea);')}>
+                  <div style={css(`color:${r[1]};font-size:17px;display:flex;`)}>
+                    <i className={`ph ${r[0]}`} aria-hidden="true" />
+                  </div>
+                  <span style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{q.name}</span>
+                  <span style={css("font-size:12.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>{q.detail}</span>
+                  <span style={css("font-size:12.5px;color:var(--fg);font-family:'Geist Mono',monospace;")}>{q.value}</span>
+                  <span style={badge(r[1], r[2])}>{r[3]}</span>
                 </div>
-                <span style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{q.name}</span>
-                <span style={css("font-size:12.5px;color:var(--fgm);font-family:'Geist Mono',monospace;")}>{q.detail}</span>
-                <span style={css("font-size:12.5px;color:var(--fg);font-family:'Geist Mono',monospace;")}>{q.value}</span>
-                <span style={badge(r[1], r[2])}>{r[3]}</span>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       )}
     </div>

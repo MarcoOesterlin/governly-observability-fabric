@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../../app/WorkspaceProvider';
 import { client } from '../../data/client';
-import { useAssets } from '../../data/useAssets';
+import { useAssetFailedRows } from '../../data/useAsset';
+import { useAssets, useRuntimeAssets } from '../../data/useAssets';
 import { useCurrentSteward } from '../../data/useCurrentSteward';
-import { useIncidents } from '../../data/useIncidents';
-import { useLastPublishRun, useSchemaChanges } from '../../data/useOverview';
+import { useCases, useIncidents } from '../../data/useIncidents';
+import { useHealthStrip, useLastPublishRun, useSchemaChanges } from '../../data/useOverview';
+import { useQualityRules } from '../../data/useQualityRules';
 import { Box } from './Box';
 import { css } from '../../lib/css';
 
@@ -31,9 +33,21 @@ export function FabricChrome({
   embedded = IS_EMBEDDED,
 }: FabricChromeProps) {
   const navigate = useNavigate();
-  const { refreshData, workspaces, workspaceId, selectedDomain } = useWorkspace();
+  const {
+    refreshLiveTelemetry,
+    isRefreshingTelemetry,
+    workspaces,
+    workspaceId,
+    selectedDomain,
+  } = useWorkspace();
   const { allRows: assets } = useAssets();
+  // Keep core cross-page hooks warm in the persistent shell so navigating between tabs renders in 0ms without value jumps
+  useRuntimeAssets();
   const incidents = useIncidents();
+  useCases();
+  useQualityRules();
+  useAssetFailedRows(undefined, true);
+  useHealthStrip('24h');
   const schemaChanges = useSchemaChanges(4);
   const lastRun = useLastPublishRun();
   const steward = useCurrentSteward();
@@ -45,12 +59,12 @@ export function FabricChrome({
   const [reloadState, setReloadState] = useState<'idle' | 'reloading' | 'done'>('idle');
 
   const handleReloadTelemetry = () => {
+    if (reloadState === 'reloading' || isRefreshingTelemetry) return;
     setReloadState('reloading');
-    refreshData();
-    setTimeout(() => {
+    void refreshLiveTelemetry().finally(() => {
       setReloadState('done');
       setTimeout(() => setReloadState('idle'), 2500);
-    }, 600);
+    });
   };
 
   const searchRef = useRef<HTMLDivElement>(null);
@@ -229,16 +243,16 @@ export function FabricChrome({
               };`
             )}
           />
-          {reloadState === 'reloading'
-            ? 'Reloading data…'
+          {reloadState === 'reloading' || isRefreshingTelemetry
+            ? 'Syncing live telemetry…'
             : reloadState === 'done'
-            ? 'Reloaded just now'
+            ? 'Synced just now'
             : lastRun?.shortLabel || 'Live telemetry'}
           <i
             className="ph ph-arrows-clockwise"
             style={css(
               `font-size:12px;display:inline-block;transition:transform 0.5s ease;${
-                reloadState === 'reloading' ? 'transform:rotate(360deg);' : ''
+                reloadState === 'reloading' || isRefreshingTelemetry ? 'transform:rotate(360deg);' : ''
               }`
             )}
             aria-hidden="true"

@@ -1,12 +1,14 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getRuntimeWorkspaceId, isHostWorkspace } from "../data/client";
-import { fetchSharedPubWorkspaces } from "../data/sharedTables";
+import { invalidateQueryCache } from "../data/queryCache";
+import { fetchSharedPubWorkspaces, preloadAllSharedTables } from "../data/sharedTables";
 import {
   ALL_WORKSPACES_EVENT,
   COMPUTE_CONFIG_EVENT,
   loadCachedAllWorkspaces,
   loadLocalComputeConfig,
+  refreshLiveRuntimeJobs,
   saveCachedAllWorkspaces,
   saveLocalComputeConfig,
 } from "../data/useComputeConfig";
@@ -31,6 +33,8 @@ export interface WorkspaceContextValue {
   setCasesEnabled: (enabled: boolean) => void;
   refreshTick: number;
   refreshData: () => void;
+  refreshLiveTelemetry: () => Promise<void>;
+  isRefreshingTelemetry: boolean;
   resolveWriteWorkspaceId: () => string;
 }
 
@@ -66,6 +70,8 @@ const WorkspaceContext = createContext<WorkspaceContextValue>({
   setCasesEnabled: () => undefined,
   refreshTick: 0,
   refreshData: () => undefined,
+  refreshLiveTelemetry: async () => undefined,
+  isRefreshingTelemetry: false,
   resolveWriteWorkspaceId: () => getRuntimeWorkspaceId(),
 });
 
@@ -146,33 +152,18 @@ export function WorkspaceProvider({
   const hasCompletedScan =
     initialOptions !== undefined || localHasScan || dbHasScan || activeWorkspaces.length > 0;
 
-  const lastRefreshAtRef = useRef<number>(Date.now());
-  const refreshData = useCallback(() => {
-    lastRefreshAtRef.current = Date.now();
-    setRefreshTick((t) => t + 1);
-  }, []);
+  const refreshTickRef = useRef<number>(0);
+  refreshTickRef.current = refreshTick;
+  const [isRefreshingTelemetry, setIsRefreshingTelemetry] = useState(false);
 
-  useEffect(() => {
-    if (initialOptions !== undefined || typeof window === "undefined") return;
-    const onVisibility = () => {
-      if (
-        document.visibilityState === "visible" &&
-        Date.now() - lastRefreshAtRef.current >= 25_000
-      ) {
-        refreshData();
-      }
-    };
-    const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        refreshData();
-      }
-    }, 60_000);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [initialOptions, refreshData]);
+  const refreshData = useCallback(() => {
+    invalidateQueryCache("raw:");
+    setRefreshTick((t) => {
+      const next = t + 1;
+      refreshTickRef.current = next;
+      return next;
+    });
+  }, []);
 
   const initial = useMemo(
     () =>
@@ -309,6 +300,25 @@ export function WorkspaceProvider({
     return getRuntimeWorkspaceId(workspaceId);
   }, [workspaceId, firstActiveWorkspaceId]);
 
+  const refreshLiveTelemetry = useCallback(async () => {
+    setIsRefreshingTelemetry(true);
+    const nextTick = refreshTickRef.current + 1;
+    try {
+      const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
+      await Promise.all([
+        preloadAllSharedTables(nextTick, true),
+        Promise.race([
+          refreshLiveRuntimeJobs(hostWsId),
+          new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+        ]),
+      ]);
+      refreshTickRef.current = nextTick;
+      setRefreshTick(nextTick);
+    } finally {
+      setIsRefreshingTelemetry(false);
+    }
+  }, [resolveWriteWorkspaceId]);
+
   return (
     <WorkspaceContext.Provider
       value={{
@@ -324,6 +334,8 @@ export function WorkspaceProvider({
         setCasesEnabled,
         refreshTick,
         refreshData,
+        refreshLiveTelemetry,
+        isRefreshingTelemetry,
         resolveWriteWorkspaceId,
       }}
     >

@@ -97,6 +97,8 @@ function writeEntry<T>(
   scheduleNotify(key, immediate);
 }
 
+export const SESSION_CACHE_TTL_MS = 30 * 60_000;
+
 /**
  * Shared promise/memory cache for underlying SQL table queries so multiple hooks
  * mounted simultaneously reuse a single network request per table.
@@ -105,10 +107,12 @@ export function fetchSharedQuery<T>(
   key: string,
   fetcher: () => Promise<T>,
   refreshTick: number = 0,
-  ttlMs: number = 25_000
+  ttlMs: number = SESSION_CACHE_TTL_MS,
+  force: boolean = false
 ): Promise<T> {
   const existing = memoryCache.get(key) as CacheEntry<T> | undefined;
   if (
+    !force &&
     existing &&
     existing.liveSession &&
     existing.tick === refreshTick &&
@@ -116,31 +120,33 @@ export function fetchSharedQuery<T>(
   ) {
     return Promise.resolve(existing.value);
   }
-  const inflight = inflightMap.get(key) as Promise<T> | undefined;
-  if (inflight) return inflight;
+  const inflightKey = `${key}@${refreshTick}`;
+  const inflight = inflightMap.get(inflightKey) as Promise<T> | undefined;
+  if (!force && inflight) return inflight;
 
   const p = fetcher()
     .then((res) => {
-      inflightMap.delete(key);
-      memoryCache.set(key, {
-        value: res,
-        updatedAt: Date.now(),
-        tick: refreshTick,
-        liveSession: true,
-      });
+      inflightMap.delete(inflightKey);
+      const isNonEmpty = !Array.isArray(res) || res.length > 0;
+      if (isNonEmpty || !existing) {
+        writeEntry(key, res, refreshTick);
+      }
       if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
         flushNotifications();
       }
-      return res;
+      return isNonEmpty || !existing ? res : existing.value;
     })
     .catch((err) => {
-      inflightMap.delete(key);
+      inflightMap.delete(inflightKey);
       if (inflightMap.size === 0 && pendingNotifyKeys.size > 0) {
         flushNotifications();
+      }
+      if (existing) {
+        return existing.value;
       }
       throw err;
     });
-  inflightMap.set(key, p);
+  inflightMap.set(inflightKey, p);
   return p;
 }
 
@@ -175,7 +181,7 @@ export function useCachedQuery<T>(
   fetcher: () => Promise<T>,
   fallback: T,
   refreshTick: number = 0,
-  ttlMs: number = 30_000
+  ttlMs: number = SESSION_CACHE_TTL_MS
 ): T {
   const [state, setState] = useState<T>(() => {
     if (!key) return fallback;

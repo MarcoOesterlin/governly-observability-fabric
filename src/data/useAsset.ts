@@ -8,9 +8,22 @@ import type {
 } from "../fixtures/types";
 import { client } from "./client";
 import { useCachedQuery } from "./queryCache";
+import {
+  fetchSharedPubAssetColumns,
+  fetchSharedPubAssetLagPoints,
+  fetchSharedPubQualityFailedRows,
+  fetchSharedPubQualityResults,
+  fetchSharedPubRefreshRuns,
+  fetchSharedPubSchemaChanges,
+  fetchSharedQualityRules,
+} from "./sharedTables";
 import { useAssets, useRuntimeAssets, type AssetItem } from "./useAssets";
 import { parseLagLabelToMinutes } from "./useFreshnessSla";
-import { isQualityRuleDeleted, isSystemQualityRuleRow } from "./useQualityRules";
+import {
+  isDriftOrNullTelemetryRow,
+  isQualityRuleDeleted,
+  isSystemQualityRuleRow,
+} from "./useQualityRules";
 
 const EMPTY_LIVE_ASSET: AssetItem = {
   id: "no-asset",
@@ -70,20 +83,10 @@ export function useAssetFreshness(assetKey?: string): {
   const sqlFreshness = useCachedQuery(
     workspaceId && assetKey ? `asset-freshness:${workspaceId}:${assetKey}:${slaMinutes}` : null,
     async () => {
-      const runsQuery = client.data.PubRefreshRun.select([
-        "run_id",
-        "completed_at",
-        "time_label",
-        "lag_label",
-        "rows_label",
-        "result",
-        "result_label",
-      ]);
-      const lagsQuery = client.data.PubAssetLagPoint.select(["ts", "lag_minutes"]);
       // Query across all workspaces for asset_key so runtime notebooks/pipelines in excluded or host workspaces resolve runs
       const [rows, lags] = await Promise.all([
-        runsQuery.where({ asset_key: { eq: assetKey! } }).execute().catch(() => []),
-        lagsQuery.where({ asset_key: { eq: assetKey! } }).execute().catch(() => []),
+        fetchSharedPubRefreshRuns(assetKey!, refreshTick).catch(() => []),
+        fetchSharedPubAssetLagPoints(assetKey!, refreshTick).catch(() => []),
       ]);
       const mappedRuns: RefreshRunFixture[] = Array.isArray(rows)
         ? rows.map((r) => {
@@ -173,40 +176,13 @@ export function useAssetQuality(assetKey?: string): QualityRuleFixture[] {
   return useCachedQuery(
     workspaceId && assetKey ? `asset-quality:${workspaceId}:${assetKey}` : null,
     async () => {
-      const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const baseQuery = client.data.PubQualityResult.select([
-        "monitor_key",
-        "rule_name",
-        "definition",
-        "observed_label",
-        "result",
+      const [allPubRows, customRows] = await Promise.all([
+        fetchSharedPubQualityResults(workspaceId!, refreshTick).catch(() => []),
+        fetchSharedQualityRules(refreshTick).catch(() => []),
       ]);
-      const pubPromise = (
-        isAll
-          ? baseQuery.where({ asset_key: { eq: assetKey! } }).execute()
-          : baseQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey! } })
-              .execute()
-      ).catch(() => []);
-
-      const ruleRepo = (client.data as Record<string, any>).QualityRule;
-      const customPromise = ruleRepo
-        ? ruleRepo
-            .select([
-              "rule_name",
-              "rule_type",
-              "expression",
-              "threshold_pct",
-              "last_pass_rate",
-              "last_passed",
-              "is_active",
-              "asset_key",
-            ])
-            .execute()
-            .catch(() => [])
-        : Promise.resolve([]);
-
-      const [rows, customRows] = await Promise.all([pubPromise, customPromise]);
+      const rows = (Array.isArray(allPubRows) ? allPubRows : []).filter(
+        (r) => r.asset_key === assetKey
+      );
       const merged = new Map<string, QualityRuleFixture>();
 
       if (Array.isArray(rows)) {
@@ -223,7 +199,8 @@ export function useAssetQuality(assetKey?: string): QualityRuleFixture[] {
 
       if (Array.isArray(customRows)) {
         const shortKey = assetKey!.split(".").pop() ?? assetKey!;
-        for (const cr of customRows) {
+        for (const rawCr of customRows) {
+          const cr = rawCr as Record<string, any>;
           if (
             cr.is_active === false ||
             isSystemQualityRuleRow(cr) ||
@@ -261,6 +238,34 @@ export function useAssetQuality(assetKey?: string): QualityRuleFixture[] {
   );
 }
 
+export function useAssetDriftTelemetry(assetKey?: string): QualityRuleFixture[] {
+  const { workspaceId, refreshTick } = useWorkspace();
+
+  return useCachedQuery(
+    workspaceId && assetKey ? `asset-drift-telemetry:${workspaceId}:${assetKey}` : null,
+    async () => {
+      const allPubRows = await fetchSharedPubQualityResults(
+        workspaceId!,
+        refreshTick
+      ).catch(() => []);
+      const shortKey = assetKey!.split(".").pop() ?? assetKey!;
+      const rows = (Array.isArray(allPubRows) ? allPubRows : []).filter(
+        (r) =>
+          (r.asset_key === assetKey || r.asset_key === shortKey) &&
+          isDriftOrNullTelemetryRow(r)
+      );
+      return rows.map((r) => ({
+        name: r.rule_name,
+        detail: r.definition,
+        value: r.observed_label,
+        result: (r.result as QualityRuleFixture["result"]) ?? "pass",
+      }));
+    },
+    EMPTY_QUALITY_RULES,
+    refreshTick
+  );
+}
+
 export interface FailedRowItem {
   id: string;
   assetKey: string;
@@ -286,33 +291,13 @@ export function useAssetFailedRows(assetKey?: string, includeAllAssets = false):
       ? `asset-failed-rows:${workspaceId}:${includeAllAssets ? "*" : assetKey ?? "*"}`
       : null,
     async () => {
-      const isAllWs = workspaceId === ALL_WORKSPACES_ID;
-      const pubFailedRowRepo = (client.data as Record<string, any>).PubQualityFailedRow;
-      if (!pubFailedRowRepo) return [];
-      const baseQuery = pubFailedRowRepo.select([
-        "id",
-        "asset_key",
-        "rule_name",
-        "rule_definition",
-        "primary_key",
-        "failed_column",
-        "failed_value",
-        "row_json",
-        "likely_cause",
-        "suggested_solution",
-        "sql_fix",
-        "detected_at",
-      ]);
+      const wsRows = await fetchSharedPubQualityFailedRows(workspaceId!, refreshTick).catch(
+        () => []
+      );
       const rows =
         includeAllAssets || !assetKey
-          ? isAllWs
-            ? await baseQuery.execute()
-            : await baseQuery.where({ workspace_id: { eq: workspaceId! } }).execute()
-          : isAllWs
-          ? await baseQuery.where({ asset_key: { eq: assetKey } }).execute()
-          : await baseQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey } })
-              .execute();
+          ? wsRows
+          : wsRows.filter((r: any) => r.asset_key === assetKey);
       if (!Array.isArray(rows) || rows.length === 0) return [];
       return rows
         .filter((r: any) => !String(r.rule_name ?? "").startsWith("Job Run:"))
@@ -357,22 +342,13 @@ export function useJobFailureDiagnostics(assetKey?: string): JobFailureDiagnosti
   const sqlDiagnostics = useCachedQuery(
     workspaceId ? `job-failure-diagnostics:${workspaceId}:${assetKey ?? "*"}` : null,
     async () => {
-      const pubFailedRowRepo = (client.data as Record<string, any>).PubQualityFailedRow;
-      if (!pubFailedRowRepo) return [];
-      const baseQuery = pubFailedRowRepo.select([
-        "id",
-        "asset_key",
-        "rule_name",
-        "rule_definition",
-        "primary_key",
-        "failed_value",
-        "likely_cause",
-        "suggested_solution",
-        "detected_at",
-      ]);
+      const allRows = await fetchSharedPubQualityFailedRows(
+        ALL_WORKSPACES_ID,
+        refreshTick
+      ).catch(() => []);
       const rows = !assetKey
-        ? await baseQuery.execute()
-        : await baseQuery.where({ asset_key: { eq: assetKey } }).execute();
+        ? allRows
+        : allRows.filter((r: any) => r.asset_key === assetKey);
       if (!Array.isArray(rows) || rows.length === 0) return [];
       return rows
         .filter((r: any) => String(r.rule_name ?? "").startsWith("Job Run:"))
@@ -429,36 +405,13 @@ export function useAssetSchema(assetKey?: string): {
   return useCachedQuery(
     workspaceId && assetKey ? `asset-schema:${workspaceId}:${assetKey}` : null,
     async () => {
-      const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const colsQuery = client.data.PubAssetColumn.select([
-        "ordinal",
-        "column_name",
-        "data_type",
-        "is_pk",
-        "is_fk",
-        "change_tag",
+      const [colRows, allChanges] = await Promise.all([
+        fetchSharedPubAssetColumns(assetKey!, workspaceId!, refreshTick).catch(() => []),
+        fetchSharedPubSchemaChanges(workspaceId!, refreshTick).catch(() => []),
       ]);
-      const changesQuery = client.data.PubSchemaChange.select([
-        "change_kind",
-        "column_name",
-        "detail",
-        "changed_by",
-        "changed_at",
-      ]);
-      const [colRows, changeRows] = await Promise.all([
-        (isAll
-          ? colsQuery.where({ asset_key: { eq: assetKey! } }).execute()
-          : colsQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey! } })
-              .execute()
-        ).catch(() => []),
-        (isAll
-          ? changesQuery.where({ asset_key: { eq: assetKey! } }).execute()
-          : changesQuery
-              .where({ workspace_id: { eq: workspaceId! }, asset_key: { eq: assetKey! } })
-              .execute()
-        ).catch(() => []),
-      ]);
+      const changeRows = (Array.isArray(allChanges) ? allChanges : []).filter(
+        (ch) => ch.asset_key === assetKey
+      );
       const columns: SchemaColumnFixture[] = Array.isArray(colRows)
         ? [...colRows]
             .sort((a, b) => a.ordinal - b.ordinal)

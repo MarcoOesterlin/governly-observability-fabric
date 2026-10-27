@@ -784,8 +784,37 @@ export function useComputeConfig() {
   };
 }
 
+let inflightRuntimeJobsPromise: Promise<void> | null = null;
+
+export function refreshLiveRuntimeJobs(hostWorkspaceId?: string): Promise<void> {
+  if (inflightRuntimeJobsPromise) return inflightRuntimeJobsPromise;
+  inflightRuntimeJobsPromise = (async () => {
+    try {
+      const hostWsId = getRuntimeWorkspaceId(hostWorkspaceId);
+      const res = await client.functions.manageComputeNotebook.invoke({
+        hostWorkspaceId: hostWsId,
+        action: 'jobs',
+        scheduleEnabled: false,
+        intervalMinutes: DEFAULT_COMPUTE_CADENCE_MINUTES,
+      });
+      if (!res?.ok) return;
+      const rawJson = (res as unknown as { jobsJson?: string }).jobsJson;
+      if (rawJson) {
+        const parsed = JSON.parse(rawJson) as LiveRuntimeJobItem[];
+        if (Array.isArray(parsed)) {
+          saveCachedRuntimeJobs(parsed);
+        }
+      }
+    } catch {
+      // Optional in unit tests / offline mode
+    } finally {
+      inflightRuntimeJobsPromise = null;
+    }
+  })();
+  return inflightRuntimeJobsPromise;
+}
+
 export function useLiveRuntimeJobs(): LiveRuntimeJobItem[] {
-  const { resolveWriteWorkspaceId, refreshTick } = useWorkspace();
   const [jobs, setJobs] = useState<LiveRuntimeJobItem[]>(loadCachedRuntimeJobs);
 
   useEffect(() => {
@@ -798,34 +827,6 @@ export function useLiveRuntimeJobs(): LiveRuntimeJobItem[] {
       window.removeEventListener('storage', onUpdate);
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const hostWsId = getRuntimeWorkspaceId(resolveWriteWorkspaceId());
-        const res = await client.functions.manageComputeNotebook.invoke({
-          hostWorkspaceId: hostWsId,
-          action: 'jobs',
-          scheduleEnabled: false,
-          intervalMinutes: DEFAULT_COMPUTE_CADENCE_MINUTES,
-        });
-        if (cancelled || !res?.ok) return;
-        const rawJson = (res as unknown as { jobsJson?: string }).jobsJson;
-        if (rawJson) {
-          const parsed = JSON.parse(rawJson) as LiveRuntimeJobItem[];
-          if (Array.isArray(parsed)) {
-            saveCachedRuntimeJobs(parsed);
-          }
-        }
-      } catch {
-        // Optional in unit tests / offline mode
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [resolveWriteWorkspaceId, refreshTick]);
 
   return jobs;
 }

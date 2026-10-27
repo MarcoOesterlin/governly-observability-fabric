@@ -7,8 +7,12 @@ import type {
   SchemaChangeFixture,
   TimeRange,
 } from "../fixtures/types";
-import { client } from "./client";
 import { useCachedQuery } from "./queryCache";
+import {
+  fetchSharedPubHealthBuckets,
+  fetchSharedPubPublishRuns,
+  fetchSharedPubSchemaChanges,
+} from "./sharedTables";
 import { useAssets } from "./useAssets";
 import { useCases, useIncidents } from "./useIncidents";
 
@@ -218,24 +222,7 @@ export function useHealthStrip(range: TimeRange = "24h"): {
     workspaceId ? `health-buckets:${workspaceId}:${range}` : null,
     async () => {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
-      const rows = isAll
-        ? await client.data.PubHealthBucket.select([
-            "bucket_index",
-            "bucket_start",
-            "height_pct",
-            "status",
-          ])
-            .where({ range: { eq: range } })
-            .first(1000)
-            .execute()
-        : await client.data.PubHealthBucket.select([
-            "bucket_index",
-            "bucket_start",
-            "height_pct",
-            "status",
-          ])
-            .where({ workspace_id: { eq: workspaceId! }, range: { eq: range } })
-            .execute();
+      const rows = await fetchSharedPubHealthBuckets(workspaceId!, range, refreshTick);
       if (!Array.isArray(rows) || rows.length === 0) {
         return EMPTY_STRIP_BUCKETS;
       }
@@ -331,24 +318,10 @@ export function useHealthStrip(range: TimeRange = "24h"): {
 export function useSchemaChanges(limit: number = 10): SchemaChangeFixture[] {
   const { workspaceId, refreshTick } = useWorkspace();
 
-  return useCachedQuery<SchemaChangeFixture[]>(
-    workspaceId ? `schema-changes:${workspaceId}:${limit}` : null,
+  const allChanges = useCachedQuery<SchemaChangeFixture[]>(
+    workspaceId ? `schema-changes:${workspaceId}` : null,
     async () => {
-      const baseQuery = client.data.PubSchemaChange.select([
-        "asset_key",
-        "change_kind",
-        "column_name",
-        "detail",
-        "changed_at",
-        "is_breaking",
-      ]);
-      const rows =
-        workspaceId === ALL_WORKSPACES_ID
-          ? await baseQuery.first(limit).execute()
-          : await baseQuery
-              .where({ workspace_id: { eq: workspaceId! } })
-              .first(limit)
-              .execute();
+      const rows = await fetchSharedPubSchemaChanges(workspaceId!, refreshTick);
       if (!Array.isArray(rows) || rows.length === 0) return [];
       return rows.map((r) => ({
         kind: (r.change_kind as SchemaChangeFixture["kind"]) ?? "changed",
@@ -367,6 +340,8 @@ export function useSchemaChanges(limit: number = 10): SchemaChangeFixture[] {
     EMPTY_SCHEMA_CHANGES,
     refreshTick
   );
+
+  return allChanges.slice(0, limit);
 }
 
 export function useLastPublishRun(): { label: string; shortLabel: string; status: string } {
@@ -384,13 +359,7 @@ export function useLastPublishRun(): { label: string; shortLabel: string; status
   const rawRun = useCachedQuery<{ tsRaw: string; status: string } | null>(
     "last-publish-run-raw",
     async () => {
-      const rows = await client.data.PubPublishRun.select([
-        "ended_at",
-        "started_at",
-        "status",
-      ])
-        .first(500)
-        .execute();
+      const rows = await fetchSharedPubPublishRuns(refreshTick);
       if (!Array.isArray(rows) || rows.length === 0) return null;
       const sorted = [...rows].sort((a, b) =>
         String(b.ended_at ?? b.started_at ?? "").localeCompare(

@@ -1,8 +1,8 @@
 import { ALL_WORKSPACES_ID } from "../app/WorkspaceProvider";
 import { client } from "./client";
-import { fetchSharedQuery } from "./queryCache";
+import { fetchSharedQuery, SESSION_CACHE_TTL_MS } from "./queryCache";
 
-export function fetchSharedPubWorkspaces(refreshTick = 0) {
+export function fetchSharedPubWorkspaces(refreshTick = 0, force = false) {
   return fetchSharedQuery(
     "raw:pub-workspaces",
     async () => {
@@ -14,16 +14,21 @@ export function fetchSharedPubWorkspaces(refreshTick = 0) {
       ]).execute();
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
 }
 
-export function fetchSharedPubAssets(workspaceId: string, refreshTick = 0) {
-  const isAll = workspaceId === ALL_WORKSPACES_ID;
-  return fetchSharedQuery(
-    `raw:pub-assets:${workspaceId}`,
+export async function fetchSharedPubAssets(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-assets:all",
     async () => {
-      const baseQuery = client.data.PubAsset.select([
+      const rows = await client.data.PubAsset.select([
         "workspace_id",
         "asset_key",
         "name",
@@ -41,38 +46,49 @@ export function fetchSharedPubAssets(workspaceId: string, refreshTick = 0) {
         "quality_pass",
         "quality_total",
         "fabric_item_url",
-      ]);
-      const rows = isAll
-        ? await baseQuery.first(500).execute()
-        : await baseQuery.where({ workspace_id: { eq: workspaceId } }).first(200).execute();
+      ])
+        .first(500)
+        .execute();
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
 }
 
-export function fetchSharedPubQualityResults(workspaceId: string, refreshTick = 0) {
-  const isAll = workspaceId === ALL_WORKSPACES_ID;
-  return fetchSharedQuery(
-    `raw:pub-quality-results:${workspaceId}`,
+export async function fetchSharedPubQualityResults(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-quality-results:all",
     async () => {
-      const baseQRes = client.data.PubQualityResult.select([
+      const rows = await client.data.PubQualityResult.select([
         "workspace_id",
         "asset_key",
+        "monitor_key",
         "rule_name",
+        "definition",
         "observed_label",
         "result",
-      ]);
-      const rows = isAll
-        ? await baseQRes.first(500).execute()
-        : await baseQRes.where({ workspace_id: { eq: workspaceId } }).first(500).execute();
+      ])
+        .first(500)
+        .execute();
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
 }
 
-export function fetchSharedQualityRules(refreshTick = 0) {
+export function fetchSharedQualityRules(refreshTick = 0, force = false) {
   return fetchSharedQuery(
     "raw:quality-rules:all",
     async () => {
@@ -94,16 +110,21 @@ export function fetchSharedQualityRules(refreshTick = 0) {
         .execute();
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
 }
 
-export function fetchSharedPubIncidents(workspaceId: string, refreshTick = 0) {
-  const isAll = workspaceId === ALL_WORKSPACES_ID;
-  return fetchSharedQuery(
-    `raw:pub-incidents:${workspaceId}`,
+export async function fetchSharedPubIncidents(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-incidents:all",
     async () => {
-      const basePub = client.data.PubIncident.select([
+      const rows = await client.data.PubIncident.select([
         "workspace_id",
         "incident_key",
         "severity",
@@ -117,44 +138,54 @@ export function fetchSharedPubIncidents(workspaceId: string, refreshTick = 0) {
         "domain_key",
         "detected_at",
         "auto_resolved_at",
-      ]);
-      const rows = await (isAll
-        ? basePub.execute()
-        : basePub.where({ workspace_id: { eq: workspaceId } }).execute()
-      ).catch(() => []);
+      ])
+        .execute()
+        .catch(() => []);
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
 }
 
-export function fetchSharedIncidentStates(workspaceId: string, refreshTick = 0) {
-  const isAll = workspaceId === ALL_WORKSPACES_ID;
-  return fetchSharedQuery(
-    `raw:incident-states:${workspaceId}`,
+export async function fetchSharedIncidentStates(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:incident-states:all",
     async () => {
-      const baseOverlay = client.data.IncidentState.select([
+      const rows = await client.data.IncidentState.select([
         "workspace_id",
         "incident_key",
         "status",
         "assignee_name",
-      ]);
-      const rows = await (isAll
-        ? baseOverlay.execute()
-        : baseOverlay.where({ workspace_id: { eq: workspaceId } }).execute()
-      ).catch(() => []);
+      ])
+        .execute()
+        .catch(() => []);
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
 }
 
-export function fetchSharedStewardCases(workspaceId: string, refreshTick = 0) {
-  const isAll = workspaceId === ALL_WORKSPACES_ID;
-  return fetchSharedQuery(
-    `raw:steward-cases:${workspaceId}`,
+export async function fetchSharedStewardCases(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:steward-cases:all",
     async () => {
-      const baseCases = client.data.StewardCase.select([
+      const rows = await client.data.StewardCase.select([
         "id",
         "workspace_id",
         "case_key",
@@ -164,18 +195,20 @@ export function fetchSharedStewardCases(workspaceId: string, refreshTick = 0) {
         "status",
         "owner_name",
         "due_date",
-      ]);
-      const rows = await (isAll
-        ? baseCases.execute()
-        : baseCases.where({ workspace_id: { eq: workspaceId } }).execute()
-      ).catch(() => []);
+      ])
+        .execute()
+        .catch(() => []);
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
 }
 
-export function fetchSharedCaseIncidentLinks(refreshTick = 0) {
+export function fetchSharedCaseIncidentLinks(refreshTick = 0, force = false) {
   return fetchSharedQuery(
     "raw:case-incident-links",
     async () => {
@@ -184,11 +217,13 @@ export function fetchSharedCaseIncidentLinks(refreshTick = 0) {
         .catch(() => []);
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
 }
 
-export function fetchSharedPubEntraUsers(refreshTick = 0) {
+export function fetchSharedPubEntraUsers(refreshTick = 0, force = false) {
   return fetchSharedQuery(
     "raw:pub-entra-users",
     async () => {
@@ -205,6 +240,254 @@ export function fetchSharedPubEntraUsers(refreshTick = 0) {
         .catch(() => []);
       return Array.isArray(rows) ? rows : [];
     },
-    refreshTick
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
   );
+}
+
+export async function fetchSharedPubHealthBuckets(
+  workspaceId: string,
+  range: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-health-buckets:all",
+    async () => {
+      const rows = await client.data.PubHealthBucket.select([
+        "workspace_id",
+        "range",
+        "bucket_index",
+        "bucket_start",
+        "height_pct",
+        "status",
+      ])
+        .first(1000)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  return allRows.filter(
+    (r) =>
+      r.range === range &&
+      (!workspaceId || workspaceId === ALL_WORKSPACES_ID || r.workspace_id === workspaceId)
+  );
+}
+
+export async function fetchSharedPubSchemaChanges(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-schema-changes:all",
+    async () => {
+      const rows = await client.data.PubSchemaChange.select([
+        "workspace_id",
+        "asset_key",
+        "change_kind",
+        "column_name",
+        "detail",
+        "changed_by",
+        "changed_at",
+        "is_breaking",
+      ])
+        .first(500)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r) => r.workspace_id === workspaceId);
+}
+
+export function fetchSharedPubPublishRuns(refreshTick = 0, force = false) {
+  return fetchSharedQuery(
+    "raw:pub-publish-runs:all",
+    async () => {
+      const rows = await client.data.PubPublishRun.select([
+        "ended_at",
+        "started_at",
+        "status",
+      ])
+        .first(500)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+}
+
+export async function fetchSharedPubQualityFailedRows(
+  workspaceId: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-quality-failed-rows:all",
+    async () => {
+      const repo = (client.data as Record<string, any>).PubQualityFailedRow;
+      if (!repo) return [];
+      const rows = await repo
+        .select([
+          "id",
+          "workspace_id",
+          "asset_key",
+          "rule_name",
+          "rule_definition",
+          "primary_key",
+          "failed_column",
+          "failed_value",
+          "row_json",
+          "likely_cause",
+          "suggested_solution",
+          "sql_fix",
+          "detected_at",
+        ])
+        .first(500)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  if (!workspaceId || workspaceId === ALL_WORKSPACES_ID) return allRows;
+  return allRows.filter((r: any) => !r.workspace_id || r.workspace_id === workspaceId);
+}
+
+export async function fetchSharedPubRefreshRuns(
+  assetKey?: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-refresh-runs:all",
+    async () => {
+      const rows = await client.data.PubRefreshRun.select([
+        "workspace_id",
+        "asset_key",
+        "run_id",
+        "completed_at",
+        "time_label",
+        "lag_label",
+        "rows_label",
+        "result",
+        "result_label",
+      ])
+        .first(1000)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  if (!assetKey) return allRows;
+  return allRows.filter((r) => r.asset_key === assetKey);
+}
+
+export async function fetchSharedPubAssetLagPoints(
+  assetKey?: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-asset-lag-points:all",
+    async () => {
+      const rows = await client.data.PubAssetLagPoint.select([
+        "workspace_id",
+        "asset_key",
+        "ts",
+        "lag_minutes",
+      ])
+        .first(1000)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  if (!assetKey) return allRows;
+  return allRows.filter((r) => r.asset_key === assetKey);
+}
+
+export async function fetchSharedPubAssetColumns(
+  assetKey?: string,
+  workspaceId?: string,
+  refreshTick = 0,
+  force = false
+) {
+  const allRows = await fetchSharedQuery(
+    "raw:pub-asset-columns:all",
+    async () => {
+      const rows = await client.data.PubAssetColumn.select([
+        "workspace_id",
+        "asset_key",
+        "ordinal",
+        "column_name",
+        "data_type",
+        "is_pk",
+        "is_fk",
+        "change_tag",
+      ])
+        .first(1000)
+        .execute()
+        .catch(() => []);
+      return Array.isArray(rows) ? rows : [];
+    },
+    refreshTick,
+    SESSION_CACHE_TTL_MS,
+    force
+  );
+  return allRows.filter(
+    (r) =>
+      (!assetKey || r.asset_key === assetKey) &&
+      (!workspaceId || workspaceId === ALL_WORKSPACES_ID || r.workspace_id === workspaceId)
+  );
+}
+
+/**
+ * Preloads all core shared telemetry tables in parallel so navigating between
+ * pages or clicking "Synced ... ago" / "Refresh live telemetry now" updates
+ * every screen atomically with zero per-page lag or value jumping.
+ */
+export async function preloadAllSharedTables(
+  refreshTick = 0,
+  force = false
+): Promise<void> {
+  await Promise.allSettled([
+    fetchSharedPubWorkspaces(refreshTick, force),
+    fetchSharedPubAssets(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedPubQualityResults(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedQualityRules(refreshTick, force),
+    fetchSharedPubIncidents(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedIncidentStates(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedStewardCases(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedCaseIncidentLinks(refreshTick, force),
+    fetchSharedPubEntraUsers(refreshTick, force),
+    fetchSharedPubHealthBuckets(ALL_WORKSPACES_ID, "24h", refreshTick, force),
+    fetchSharedPubSchemaChanges(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedPubPublishRuns(refreshTick, force),
+    fetchSharedPubQualityFailedRows(ALL_WORKSPACES_ID, refreshTick, force),
+    fetchSharedPubRefreshRuns(undefined, refreshTick, force),
+    fetchSharedPubAssetLagPoints(undefined, refreshTick, force),
+    fetchSharedPubAssetColumns(undefined, ALL_WORKSPACES_ID, refreshTick, force),
+  ]);
 }

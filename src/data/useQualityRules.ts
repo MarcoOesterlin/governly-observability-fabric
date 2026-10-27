@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { client } from './client';
 import { ALL_WORKSPACES_ID, useWorkspace } from '../app/WorkspaceProvider';
 import { invalidateQueryCache, updateQueryCache, useCachedQuery } from './queryCache';
+import { fetchSharedPubQualityResults } from './sharedTables';
 import { useCurrentSteward } from './useCurrentSteward';
 import type { RuleType } from '../lib/ruleValidator';
-import type { SchemaColumnFixture } from '../fixtures/types';
+import type { QualityRuleFixture, SchemaColumnFixture } from '../fixtures/types';
 
 export interface CustomQualityRule {
   id: string;
@@ -177,11 +178,61 @@ export const DATA_QUALITY_DIMENSIONS: DataQualityDimensionTemplate[] = [
   },
 ];
 
+export function isDriftOrNullTelemetryRow(r: {
+  monitor_key?: unknown;
+  rule_name?: unknown;
+}): boolean {
+  const mk = String(r.monitor_key ?? '')
+    .trim()
+    .toLowerCase();
+  const rn = String(r.rule_name ?? '')
+    .trim()
+    .toLowerCase();
+  return (
+    rn.startsWith('row count drift') ||
+    rn.startsWith('key null rate') ||
+    mk.includes(':ops_drift') ||
+    mk.includes(':knull_')
+  );
+}
+
+const EMPTY_DRIFT_TELEMETRY: QualityRuleFixture[] = [];
+
+export function useAssetDriftTelemetry(assetKey?: string): QualityRuleFixture[] {
+  const { workspaceId, refreshTick } = useWorkspace();
+
+  return useCachedQuery(
+    workspaceId && assetKey ? `asset-drift-telemetry:${workspaceId}:${assetKey}` : null,
+    async () => {
+      const allPubRows = await fetchSharedPubQualityResults(
+        workspaceId!,
+        refreshTick,
+      ).catch(() => []);
+      const shortKey = assetKey!.split('.').pop() ?? assetKey!;
+      const rows = (Array.isArray(allPubRows) ? allPubRows : []).filter(
+        (r) =>
+          (r.asset_key === assetKey || r.asset_key === shortKey) &&
+          isDriftOrNullTelemetryRow(r),
+      );
+      return rows.map((r) => ({
+        name: r.rule_name,
+        detail: r.definition,
+        value: r.observed_label,
+        result: (r.result as QualityRuleFixture['result']) ?? 'pass',
+      }));
+    },
+    EMPTY_DRIFT_TELEMETRY,
+    refreshTick,
+  );
+}
+
 export function isSystemQualityRuleRow(r: {
   rule_type?: unknown;
   asset_key?: unknown;
   rule_name?: unknown;
+  monitor_key?: unknown;
 }): boolean {
+  if (isDriftOrNullTelemetryRow(r)) return true;
   const rt = String(r.rule_type ?? '')
     .trim()
     .toLowerCase();

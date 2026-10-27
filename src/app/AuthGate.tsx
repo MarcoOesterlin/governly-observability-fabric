@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { client } from "../data/client";
 import { invalidateQueryCache } from "../data/queryCache";
+import { preloadAllSharedTables } from "../data/sharedTables";
 import { SignInScreen } from "./SignInScreen";
 import { AppSpinner } from "../components/ui/AppSpinner";
 
@@ -9,13 +10,21 @@ type Session = { user?: { id: string; email?: string; name?: string } } | null;
 export function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>(null);
   const [ready, setReady] = useState(false);
+  const lastUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = client.auth.onSessionChange((s: unknown) => {
-      if (!cancelled) {
+      if (cancelled) return;
+      const nextSession = (s as Session) ?? null;
+      const nextUserId = nextSession?.user?.id ?? null;
+      if (nextUserId !== lastUserIdRef.current) {
+        lastUserIdRef.current = nextUserId;
         invalidateQueryCache();
-        setSession(s as Session);
+        setSession(nextSession);
+        if (nextUserId) {
+          void preloadAllSharedTables(0);
+        }
       }
     });
     void (async () => {
@@ -26,8 +35,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
         await auth.initEmbeddedAuth?.();
       } finally {
         if (!cancelled) {
-          invalidateQueryCache();
-          setSession((client.auth.getSession() as Session) ?? null);
+          const initialSession = (client.auth.getSession() as Session) ?? null;
+          lastUserIdRef.current = initialSession?.user?.id ?? null;
+          setSession(initialSession);
+          if (initialSession?.user?.id) {
+            void preloadAllSharedTables(0);
+          }
           setReady(true);
         }
       }

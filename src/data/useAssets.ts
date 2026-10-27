@@ -12,6 +12,7 @@ import {
 import { useLiveRuntimeJobs, type LiveRuntimeJobItem } from "./useComputeConfig";
 import { isQualityRuleDeleted, isSystemQualityRuleRow } from "./useQualityRules";
 import {
+  loadLocalSlas,
   parseLagLabelToMinutes,
   resolveEffectiveSlaMinutes,
   useFreshnessSlas,
@@ -41,7 +42,7 @@ export function isRuntimeOnlyAssetType(assetType: string): boolean {
   );
 }
 
-function mapRawPubAssetToItem(
+export function mapRawPubAssetToItem(
   r: Record<string, any>,
   pubQList: Array<Record<string, any>>,
   activeUserRules: Array<Record<string, any>>,
@@ -50,11 +51,16 @@ function mapRawPubAssetToItem(
   const aKey = r.asset_key || r.name || base.id;
   const shortName = aKey.includes(".") ? aKey.split(".").pop()! : aKey;
   const assetPubQ = pubQList.filter(
-    (q) => q.asset_key === aKey || q.asset_key === shortName,
+    (q) =>
+      (q.asset_key === aKey || q.asset_key === shortName) &&
+      !isSystemQualityRuleRow(q) &&
+      !isQualityRuleDeleted(q.id as string | undefined, q.rule_name as string | undefined),
   );
   const assetUserRules = activeUserRules.filter(
     (ur) =>
-      ur.asset_key === aKey || ur.asset_key === shortName || ur.asset_key === "*",
+      (ur.asset_key === aKey || ur.asset_key === shortName || ur.asset_key === "*") &&
+      !isSystemQualityRuleRow(ur) &&
+      !isQualityRuleDeleted(ur.id as string | undefined, ur.rule_name as string | undefined),
   );
   const isRuntimeJob = isRuntimeOnlyAssetType(base.type);
   const hasRules = !isRuntimeJob && (assetPubQ.length > 0 || assetUserRules.length > 0);
@@ -156,8 +162,12 @@ export function useAssets(filter: AssetFilter = {}): {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
       const [res, qResults, allUserRules] = await Promise.all([
         fetchSharedPubAssets(workspaceId!, refreshTick),
-        fetchSharedPubQualityResults(workspaceId!, refreshTick).catch(() => []),
-        fetchSharedQualityRules(refreshTick).catch(() => []),
+        fetchSharedPubQualityResults(workspaceId!, refreshTick).catch(
+          () => [] as Array<Record<string, any>>,
+        ),
+        fetchSharedQualityRules(refreshTick).catch(
+          () => [] as Array<Record<string, any>>,
+        ),
       ]);
       if (!Array.isArray(res) || res.length === 0) return [];
       const userRules = isAll
@@ -180,8 +190,15 @@ export function useAssets(filter: AssetFilter = {}): {
       });
       if (validAssets.length === 0) return [];
 
+      const dbSlaMap: Record<string, number> = { ...loadLocalSlas() };
+      for (const r of Array.isArray(userRules) ? userRules : []) {
+        if (r.rule_type === "freshness_sla" && r.is_active && Number(r.threshold_pct) > 0) {
+          dbSlaMap[r.asset_key] = Number(r.threshold_pct);
+        }
+      }
+
       return validAssets.map((r) =>
-        mapRawPubAssetToItem(r, pubQList, activeUserRules),
+        applyEffectiveSla(mapRawPubAssetToItem(r, pubQList, activeUserRules), dbSlaMap),
       );
     },
     EMPTY_ASSETS,
@@ -278,13 +295,13 @@ export function useRuntimeAssets(): {
   );
 
   const byKey = new Map<string, AssetItem>();
-  for (const row of allSqlRows) {
-    byKey.set(row.name, applyEffectiveSla(row, slaMap));
-  }
   for (const job of liveJobs) {
     const jobItem = applyEffectiveSla(mapLiveJobToAssetItem(job), slaMap);
-    // Live Job Scheduler telemetry takes precedence for notebooks and pipelines across all workspaces
     byKey.set(job.asset_key, jobItem);
+  }
+  for (const row of allSqlRows) {
+    // Published SQL telemetry from nb_governly_compute_publish is the canonical source of truth
+    byKey.set(row.name, applyEffectiveSla(row, slaMap));
   }
 
   return {
