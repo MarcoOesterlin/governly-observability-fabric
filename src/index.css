@@ -1,5 +1,6 @@
 *{box-sizing:border-box;}
 body{margin:0;font-family:'Geist Variable','Geist',system-ui,-apple-system,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;}
+svg text{font-family:'Geist Mono Variable','Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;}
 ::selection{background:rgba(99,102,241,0.20);}
 @keyframes pulseDot{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.35;transform:scale(.78);}}
 ::-webkit-scrollbar{width:11px;height:11px;}

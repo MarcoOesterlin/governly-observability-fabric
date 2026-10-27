@@ -210,35 +210,32 @@ export function FreshnessTab({
             )}
           </div>
         </div>
-        <svg viewBox="0 0 680 220" style={css('width:100%;height:230px;display:block;')}>
-          <line x1="82" y1="40" x2="680" y2="40" stroke="var(--border)" strokeWidth="1" />
-          <line x1="82" y1="90" x2="680" y2="90" stroke="var(--border)" strokeWidth="1" />
-          <line x1="82" y1="140" x2="680" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" />
-          <line x1="82" y1="194" x2="680" y2="194" stroke="var(--border)" strokeWidth="1" />
-          <text x="4" y="44" fill="var(--fgs)" style={css("font-family:'Geist Mono',monospace;font-size:10px;")}>
-            {topAxisLabel}
-          </text>
-          <text x="4" y="94" fill="var(--fgs)" style={css("font-family:'Geist Mono',monospace;font-size:10px;")}>
-            {midAxisLabel}
-          </text>
-          <text
-            x="4"
-            y="143"
-            fill="var(--crit)"
-            style={css(
-              "font-family:'Geist Mono Variable','Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;font-weight:600;letter-spacing:-0.02em;",
-            )}
-          >
-            SLA ({slaLabel})
-          </text>
-          <text x="4" y="198" fill="var(--fgs)" style={css("font-family:'Geist Mono',monospace;font-size:10px;")}>
-            0m
-          </text>
-          <polyline points={points} fill="none" stroke="var(--info)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-          <circle cx="660" cy={lastY} r="4.5" fill={dotColor} />
-        </svg>
+        <div style={css('display:grid;grid-template-columns:64px 1fr;align-items:stretch;height:220px;')}>
+          <div style={css("position:relative;height:220px;font-family:'Geist Mono Variable','Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1;user-select:none;")}>
+            <span style={css('position:absolute;left:0;top:18.2%;transform:translateY(-50%);color:var(--fgs);')}>
+              {topAxisLabel}
+            </span>
+            <span style={css('position:absolute;left:0;top:40.9%;transform:translateY(-50%);color:var(--fgs);')}>
+              {midAxisLabel}
+            </span>
+            <span style={css('position:absolute;left:0;top:63.6%;transform:translateY(-50%);color:var(--crit);font-weight:600;')}>
+              SLA {slaLabel}
+            </span>
+            <span style={css('position:absolute;left:0;top:88.2%;transform:translateY(-50%);color:var(--fgs);')}>
+              0m
+            </span>
+          </div>
+          <svg viewBox="80 0 600 220" preserveAspectRatio="none" style={css('width:100%;height:220px;display:block;overflow:visible;')}>
+            <line x1="82" y1="40" x2="676" y2="40" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <line x1="82" y1="90" x2="676" y2="90" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <line x1="82" y1="140" x2="676" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" vectorEffect="non-scaling-stroke" />
+            <line x1="82" y1="194" x2="676" y2="194" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            <polyline points={points} fill="none" stroke="var(--info)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+            <circle cx="660" cy={lastY} r="4.5" fill={dotColor} vectorEffect="non-scaling-stroke" />
+          </svg>
+        </div>
         {lagLabels.length > 0 && (
-          <div style={css("display:flex;justify-content:space-between;font-size:10.5px;color:var(--fgs);font-family:'Geist Mono Variable','Geist Mono',ui-monospace,monospace;padding-left:78px;margin-top:4px;")}>
+          <div style={css("display:flex;justify-content:space-between;font-size:11px;color:var(--fgs);font-family:'Geist Mono Variable','Geist Mono',ui-monospace,monospace;padding-left:64px;margin-top:4px;")}>
             {lagLabels.map((lbl, idx) => (
               <span key={idx}>{lbl}</span>
             ))}

@@ -143,26 +143,42 @@ export function OverviewTab({
             <div style={css('font-size:14px;font-weight:600;color:var(--fg);')}>
               Refresh lag · commit history
             </div>
-            <span style={css('font-size:11.5px;color:var(--fgm);display:flex;align-items:center;gap:6px;')}>
-              <span style={css('width:14px;height:0;border-top:2px dashed var(--crit);display:inline-block;')} />
-              SLA target: {slaLabel}
-            </span>
+            <div style={css('display:flex;align-items:center;gap:12px;')}>
+              <span style={css("font-size:11px;font-weight:600;font-family:'Geist Mono Variable','Geist Mono',ui-monospace,monospace;color:var(--fgm);")}>
+                Latest: <span style={css(`color:${dotColor};`)}>{asset.fresh}</span>
+              </span>
+              <span style={css("font-size:11px;font-weight:500;font-family:'Geist Mono Variable','Geist Mono',ui-monospace,monospace;color:var(--fgm);display:flex;align-items:center;gap:6px;")}>
+                <span style={css('width:14px;height:0;border-top:2px dashed var(--crit);display:inline-block;')} />
+                SLA ≤ {slaLabel}
+              </span>
+            </div>
           </div>
-          <svg viewBox="0 0 680 220" style={css('width:100%;height:210px;display:block;')}>
-            <line x1="46" y1="40" x2="680" y2="40" stroke="var(--border)" strokeWidth="1" />
-            <line x1="46" y1="90" x2="680" y2="90" stroke="var(--border)" strokeWidth="1" />
-            <line x1="46" y1="140" x2="680" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" />
-            <line x1="46" y1="194" x2="680" y2="194" stroke="var(--border)" strokeWidth="1" />
-            <text x="6" y="44" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">{topAxisLabel}</text>
-            <text x="6" y="94" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">{midAxisLabel}</text>
-            <text x="6" y="144" fontSize="10" fill="var(--crit)" fontFamily="Geist Mono">{slaLabel}</text>
-            <text x="6" y="198" fontSize="10" fill="var(--fgs)" fontFamily="Geist Mono">0m</text>
-            <polyline points={points} fill="none" stroke="var(--info)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx="660" cy={lastY} r="4.5" fill={dotColor} />
-            <text x="590" y={Math.max(20, lastY - 10)} fontSize="10.5" fill={dotColor} fontFamily="Geist Mono" fontWeight="600">{asset.fresh}</text>
-          </svg>
+          <div style={css('display:grid;grid-template-columns:64px 1fr;align-items:stretch;height:210px;')}>
+            <div style={css("position:relative;height:210px;font-family:'Geist Mono Variable','Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1;user-select:none;")}>
+              <span style={css('position:absolute;left:0;top:18.2%;transform:translateY(-50%);color:var(--fgs);')}>
+                {topAxisLabel}
+              </span>
+              <span style={css('position:absolute;left:0;top:40.9%;transform:translateY(-50%);color:var(--fgs);')}>
+                {midAxisLabel}
+              </span>
+              <span style={css('position:absolute;left:0;top:63.6%;transform:translateY(-50%);color:var(--crit);font-weight:600;')}>
+                SLA {slaLabel}
+              </span>
+              <span style={css('position:absolute;left:0;top:88.2%;transform:translateY(-50%);color:var(--fgs);')}>
+                0m
+              </span>
+            </div>
+            <svg viewBox="80 0 600 220" preserveAspectRatio="none" style={css('width:100%;height:210px;display:block;overflow:visible;')}>
+              <line x1="82" y1="40" x2="676" y2="40" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <line x1="82" y1="90" x2="676" y2="90" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <line x1="82" y1="140" x2="676" y2="140" stroke="var(--crit)" strokeWidth="1.4" strokeDasharray="5 5" vectorEffect="non-scaling-stroke" />
+              <line x1="82" y1="194" x2="676" y2="194" stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <polyline points={points} fill="none" stroke="var(--info)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+              <circle cx="660" cy={lastY} r="4.5" fill={dotColor} vectorEffect="non-scaling-stroke" />
+            </svg>
+          </div>
           {lagLabels.length > 0 && (
-            <div style={css("display:flex;justify-content:space-between;font-size:10.5px;color:var(--fgs);font-family:'Geist Mono',monospace;padding-left:36px;")}>
+            <div style={css("display:flex;justify-content:space-between;font-size:11px;color:var(--fgs);font-family:'Geist Mono Variable','Geist Mono',ui-monospace,monospace;padding-left:64px;margin-top:4px;")}>
               {lagLabels.map((lbl, idx) => (
                 <span key={idx}>{lbl}</span>
               ))}
