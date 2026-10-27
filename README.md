@@ -6,19 +6,20 @@ It provides zero-plumbing discovery, live telemetry, and interactive governance 
 
 ---
 
-## One-Click Fabric Workspace Installation & Updates
+## Quick Start: One-Click Install & Initial Setup
 
-You can deploy or update Governly directly from inside any Microsoft Fabric workspace attached to an F-SKU capacity:
-
+### 1. Install or Update in Microsoft Fabric (1 Minute)
 1. Download [`fabric/bootstrap/nb_governly_installer.ipynb`](fabric/bootstrap/nb_governly_installer.ipynb).
-2. Import the notebook into your target Microsoft Fabric workspace.
-3. Click **Run all**.
+2. Import the notebook into your target Microsoft Fabric workspace (attached to an `F2+` capacity) and click **Run all**.
+3. The installer automatically provisions the Fabric SQL Database (`governly`), User Data Functions, Static WebApp, and the PySpark scanner notebook (`nb_governly_compute_publish`) with the recurring schedule **paused by default** so you can choose which workspaces to scan first.
 
-What the installer notebook does automatically (idempotent for both first-time installs and updates):
-- Clones or updates this repository in the notebook environment.
-- Runs `npx rayfin up --yes` to provision or update the Fabric SQL Database, UserDataFunction backend (`manageComputeNotebook`), 25 SQL tables, and Static WebApp.
-- Deploys or updates the standalone Spark telemetry notebook (`nb_governly_compute_publish`) wired to the workspace's SQL endpoint.
-- Leaves the **initial scan and recurring schedule OFF by default** so you can first choose which workspaces to monitor in **Settings** before consuming Spark capacity.
+### 2. Configure Workspaces & Schedule in Settings
+1. Open the deployed **Governly** web app in your workspace and go to **Settings** (bottom-left navigation).
+2. **Select Monitored Workspaces:** Check the Fabric workspaces you want Governly to profile and click **Save Workspace Selection**.
+3. **Run First Scan & Enable Schedule:** Click **Run Compute Notebook Now** to trigger your initial scan, then select your cadence (default **Every 36m**) and click **Enable Recurring Schedule**.
+4. *(Optional)* Configure **Freshness SLAs**, **Expected Landing Times (`HH:MM` or Auto Average)**, or **Azure Key Vault Service Principal** parameters on the same page.
+
+> 📖 **Want the full details?** Jump to [Full Installation & Update Guide ↓](#one-click-fabric-workspace-installation--updates), [Detailed Settings & Schedule Configuration ↓](#configuring-the-compute-notebook-workspaces--schedule-in-settings), or [Required Permissions ↓](#required-permissions--where-to-configure-them).
 
 ---
 
@@ -43,8 +44,9 @@ What the installer notebook does automatically (idempotent for both first-time i
    - [Two-Tier Query Cache & Atomic Render Coalescing](#6-two-tier-query-cache--atomic-render-coalescing)
 5. [Security, Credentials & Data Residency](#security-credentials--data-residency)
 6. [Required Permissions & Where to Configure Them](#required-permissions--where-to-configure-them)
-7. [Configuring the Compute Notebook, Workspaces & Schedule in Settings](#configuring-the-compute-notebook-workspaces--schedule-in-settings)
-8. [CLI Deployment, Testing & Local Development](#cli-deployment-testing--local-development)
+7. [One-Click Fabric Workspace Installation & Updates](#one-click-fabric-workspace-installation--updates)
+8. [Configuring the Compute Notebook, Workspaces & Schedule in Settings](#configuring-the-compute-notebook-workspaces--schedule-in-settings)
+9. [CLI Deployment, Testing & Local Development](#cli-deployment-testing--local-development)
 
 ---
 
@@ -389,6 +391,22 @@ Governly stores **only technical metadata and aggregated observability telemetry
 | **4. Monitored Workspaces & Lakehouses** | **Contributor** (or **Viewer** + OneLake **ReadAll**) | **Fabric Portal → Monitored Workspace(s) → Manage access** | The identity that runs or schedules `nb_governly_compute_publish` discovers workspaces it has access to, lists items and jobs via the Fabric REST API, and profiles Delta tables and `_delta_log` commit history from OneLake (`abfss://...`). |
 | **5. Fabric SQL Database (`governly`)** | Automatic for installer owner; for additional stewards, grant **Read / Write** access | **Fabric Portal → `governly` SQL Database → Manage permissions** (or SQL `db_datareader` / `db_datawriter`) | Allows the web app and `nb_governly_compute_publish` to read published telemetry (`dbo.Pub*`) and write custom Data Quality rules (`dbo.QualityRules`), SLAs, incident statuses (`dbo.IncidentStates`), and steward cases (`dbo.StewardCases`). |
 | **6. Optional: Unattended Service Principal & Key Vault** | **Member / Contributor** on workspaces + **Key Vault Secrets User** on Azure Key Vault | **Entra ID → App registrations**, **Fabric Workspace → Manage access**, and **Azure Portal → Key Vault → Access control (IAM)** | Only needed if you prefer `nb_governly_compute_publish` to authenticate with an Entra Service Principal instead of the scheduling user's Fabric identity. Configure `TENANT_ID`, `CLIENT_ID`, `KEY_VAULT_URI`, and `SECRET_NAME` directly in **Governly → Settings** (or as notebook parameters). |
+
+---
+
+## One-Click Fabric Workspace Installation & Updates
+
+You can deploy or update Governly directly from inside any Microsoft Fabric workspace attached to an F-SKU capacity:
+
+1. Download [`fabric/bootstrap/nb_governly_installer.ipynb`](fabric/bootstrap/nb_governly_installer.ipynb).
+2. Import the notebook into your target Microsoft Fabric workspace.
+3. Click **Run all**.
+
+What the installer notebook does automatically (idempotent for both first-time installs and updates):
+- Clones or updates this repository in the notebook environment.
+- Runs `npx rayfin up --yes` to provision or update the Fabric SQL Database, UserDataFunction backend (`manageComputeNotebook`), 25 SQL tables, and Static WebApp.
+- Deploys or updates the standalone Spark telemetry notebook (`nb_governly_compute_publish`) wired to the workspace's SQL endpoint.
+- Leaves the **initial scan and recurring schedule OFF by default** so you can first choose which workspaces to monitor in **Settings** before consuming Spark capacity.
 
 ---
 
