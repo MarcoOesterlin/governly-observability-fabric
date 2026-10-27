@@ -13,7 +13,7 @@ const keyListeners = new Map<string, Set<() => void>>();
 const pendingNotifyKeys = new Set<string>();
 let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
 
-const SESSION_PREFIX = "governly:qcache:v3:";
+const SESSION_PREFIX = "governly:qcache:v4:";
 
 function flushNotifications(): void {
   if (coalesceTimer !== null) {

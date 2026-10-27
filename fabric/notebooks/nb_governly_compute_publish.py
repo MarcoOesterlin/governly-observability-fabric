@@ -10,6 +10,7 @@ APP_SQL_DATABASE = "governly-730f1186-45e9-4ad0-862c-ad1d3e9b0204"
 
 # %%
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 import json
 import struct
 import time
@@ -521,10 +522,19 @@ def open_fabric_sql_jdbc(spark: Any, server: str, database: str, token: str) -> 
     ds.setDatabaseName(database)
     ds.setEncrypt("true")
     ds.setTrustServerCertificate(False)
+    ds.setLoginTimeout(60)
     ds.setAccessToken(token)
-    conn = ds.getConnection()
-    conn.setAutoCommit(False)
-    return conn
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            conn = ds.getConnection()
+            conn.setAutoCommit(False)
+            return conn
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 3:
+                time.sleep(6 * (attempt + 1))
+    raise last_exc if last_exc is not None else RuntimeError("JDBC connection failed")
 
 
 def _fabric_api_get(url: str, token: str) -> dict:
@@ -561,6 +571,36 @@ INTERNAL_STAGING_TABLES = {
 
 
 _DELTA_LOG_COMMITS_CACHE: dict[str, list[str]] = {}
+_DELTA_LOG_FILE_MTIME_CACHE: dict[tuple[str, str], datetime] = {}
+_DELTA_TABLE_LAST_MODIFIED_CACHE: dict[str, datetime] = {}
+_DELTA_TABLE_NULL_COUNTS_CACHE: dict[str, dict[str, int]] = {}
+
+
+def _parse_onelake_last_modified(
+    lm_str: str | None = None,
+    creation_time_str: str | None = None,
+) -> datetime | None:
+    """Parse OneLake DFS lastModified HTTP-date or creationTime Windows FILETIME into UTC datetime."""
+    candidates: list[datetime] = []
+    if lm_str:
+        try:
+            candidates.append(
+                parsedate_to_datetime(str(lm_str)).astimezone(timezone.utc).replace(microsecond=0)
+            )
+        except Exception:
+            pass
+    if creation_time_str and str(creation_time_str).strip().isdigit():
+        try:
+            ft = int(str(creation_time_str).strip())
+            if ft > 0:
+                dt = (
+                    datetime(1601, 1, 1, tzinfo=timezone.utc)
+                    + timedelta(microseconds=ft / 10.0)
+                ).replace(microsecond=0)
+                candidates.append(dt)
+        except Exception:
+            pass
+    return max(candidates) if candidates else None
 
 
 def _list_onelake_delta_tables(
@@ -590,6 +630,11 @@ def _list_onelake_delta_tables(
                     tdir = pname[: -len("/_delta_log")]
                 elif "/_delta_log/" in pname and pname.endswith(".json") and "checkpoint" not in pname:
                     tdir, log_file = pname.split("/_delta_log/", 1)
+                elif "/Tables/" in pname and pname.endswith(".parquet") and "/_delta_log/" not in pname:
+                    tdir = pname.rsplit("/", 1)[0]
+                    # Strip partition folders (e.g. load_type=full) so tdir resolves to table root
+                    while "=" in tdir.rsplit("/", 1)[-1] and "/Tables/" in tdir:
+                        tdir = tdir.rsplit("/", 1)[0]
                 if not tdir or "/Tables/" not in tdir:
                     continue
                 rel = tdir.split("/Tables/", 1)[1].strip("/")
@@ -601,9 +646,20 @@ def _list_onelake_delta_tables(
                 else:
                     schema_name, table_name = parts[0], parts[-1]
                 abfss_path = f"{base_uri}/{rel}"
+                p_dt = _parse_onelake_last_modified(
+                    p.get("lastModified"), p.get("creationTime")
+                )
+                if p_dt is not None:
+                    prev_max = _DELTA_TABLE_LAST_MODIFIED_CACHE.get(abfss_path)
+                    if prev_max is None or p_dt > prev_max:
+                        _DELTA_TABLE_LAST_MODIFIED_CACHE[abfss_path] = p_dt
                 if log_file and "/" not in log_file:
                     _DELTA_LOG_COMMITS_CACHE.setdefault(abfss_path, []).append(log_file)
-                if abfss_path not in seen_paths:
+                    if p_dt is not None:
+                        _DELTA_LOG_FILE_MTIME_CACHE[(abfss_path, log_file)] = p_dt
+                if abfss_path not in seen_paths and (
+                    pname.endswith("/_delta_log") or log_file
+                ):
                     seen_paths.add(abfss_path)
                     discovered.append((schema_name, table_name, abfss_path))
         except Exception:
@@ -672,8 +728,19 @@ def _read_onelake_delta_log_metadata(
                 headers={"Authorization": f"Bearer {storage_token}", "x-ms-version": "2021-06-08"},
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
+                hdr_dt = _parse_onelake_last_modified(resp.headers.get("Last-Modified"))
                 raw = resp.read().decode("utf-8")
             ver_num = int(lf.replace(".json", "")) if lf.replace(".json", "").isdigit() else 0
+            file_load_candidates = [
+                d
+                for d in (
+                    _DELTA_LOG_FILE_MTIME_CACHE.get((abfss_path, lf)),
+                    hdr_dt,
+                    _DELTA_TABLE_LAST_MODIFIED_CACHE.get(abfss_path) if lf == to_read[-1] else None,
+                )
+                if d is not None
+            ]
+            file_load_dt = max(file_load_candidates) if file_load_candidates else None
             for line in raw.splitlines():
                 if not line.strip():
                     continue
@@ -692,17 +759,31 @@ def _read_onelake_delta_log_metadata(
                             parsed_cols.append((fname, ftype))
                     if parsed_cols:
                         col_tuples = parsed_cols
+                if "add" in obj and isinstance(obj["add"], dict):
+                    stats_raw = obj["add"].get("stats")
+                    if isinstance(stats_raw, str) and stats_raw.strip():
+                        try:
+                            stats_obj = json.loads(stats_raw)
+                            nc_map = stats_obj.get("nullCount")
+                            if isinstance(nc_map, dict):
+                                tbl_nc = _DELTA_TABLE_NULL_COUNTS_CACHE.setdefault(abfss_path, {})
+                                for col_k, col_v in nc_map.items():
+                                    if isinstance(col_v, (int, float)):
+                                        tbl_nc[str(col_k)] = tbl_nc.get(str(col_k), 0) + int(col_v)
+                        except Exception:
+                            pass
                 if "commitInfo" in obj:
                     ci = obj["commitInfo"]
                     ts_ms = ci.get("timestamp")
+                    ci_dt: datetime | None = None
                     if isinstance(ts_ms, (int, float)) and ts_ms > 0:
-                        ts_iso = (
-                            datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
-                            .replace(microsecond=0)
-                            .isoformat()
+                        ci_dt = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).replace(
+                            microsecond=0
                         )
-                    else:
-                        ts_iso = now_iso
+                    # Always prefer OneLake file lastModified (when the data was actually loaded into the Lakehouse)
+                    # over commitInfo.timestamp (which may be the origin date of a copied/sample dataset)
+                    eff_dt = file_load_dt or ci_dt
+                    ts_iso = eff_dt.isoformat() if eff_dt is not None else now_iso
                     metrics = ci.get("operationMetrics") or {}
                     op_name = str(ci.get("operation") or "WRITE").upper()
                     ins_r = int(
@@ -1324,6 +1405,12 @@ def discover_and_profile_live_fabric(
                     latest_dt = datetime.fromisoformat(latest_iso.replace("Z", "+00:00"))
                 except Exception:
                     latest_dt = now_dt
+                table_load_dt = _DELTA_TABLE_LAST_MODIFIED_CACHE.get(abfss_path)
+                if table_load_dt is not None and table_load_dt > latest_dt:
+                    latest_dt = table_load_dt
+                    latest_iso = table_load_dt.isoformat()
+                    if commits:
+                        commits[0]["ts"] = latest_iso
                 lag_min = max(1.0, round((now_dt - latest_dt).total_seconds() / 60.0, 1))
                 sla_rules = [
                     ur
@@ -1340,8 +1427,8 @@ def discover_and_profile_live_fabric(
                     if matched_sla is not None:
                         custom_sla_min = matched_sla
                         break
-                sla_min = custom_sla_min if custom_sla_min is not None else (1440 if ("dimension" in table_name.lower() or "dq_" in table_name.lower()) else 720)
-                is_late = (lag_min > sla_min) if custom_sla_min is not None else (lag_min > sla_min and ("fact_" in table_name.lower() or "sale" in table_name.lower()))
+                sla_min = custom_sla_min if custom_sla_min is not None else 1440
+                is_late = lag_min > sla_min
 
                 for c_idx, c in enumerate(commits[:5]):
                     try:
@@ -1546,50 +1633,20 @@ def discover_and_profile_live_fabric(
                     if idx_f == 0 or any(tok in cname.lower() for tok in ("_id", "_key", "_code", "_date", "amount", "status"))
                 ][:4]
                 if key_col_names and row_count > 0:
-                    if row_count <= 250_000:
-                        try:
-                            cur_df = _get_df()
-                            agg_exprs = [f"SUM(CASE WHEN `{kc}` IS NULL THEN 1 ELSE 0 END) AS `n_{i}`" for i, kc in enumerate(key_col_names)]
-                            null_row = cur_df.selectExpr(*agg_exprs).first()
-                            if null_row is not None:
-                                nd = null_row.asDict()
-                                for i, kc in enumerate(key_col_names):
-                                    n_cnt = int(nd.get(f"n_{i}") or 0)
-                                    n_pct = round((n_cnt / row_count) * 100.0, 2)
-                                    quality.append({
-                                        "workspace_id": wid,
-                                        "monitor_key": f"{asset_key[:40]}:knull_{kc[:16]}"[:64],
-                                        "asset_key": asset_key,
-                                        "rule_name": f"Key Null Rate ({kc})"[:64],
-                                        "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],
-                                        "passed": n_pct <= 2.0,
-                                        "pass_rate": round(100.0 - n_pct, 2),
-                                        "observed_label": f"{n_pct:.2f}% null"[:32],
-                                    })
-                        except Exception:
-                            for kc in key_col_names:
-                                quality.append({
-                                    "workspace_id": wid,
-                                    "monitor_key": f"{asset_key[:40]}:knull_{kc[:16]}"[:64],
-                                    "asset_key": asset_key,
-                                    "rule_name": f"Key Null Rate ({kc})"[:64],
-                                    "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],
-                                    "passed": True,
-                                    "pass_rate": 100.0,
-                                    "observed_label": "0.00% null",
-                                })
-                    else:
-                        for kc in key_col_names:
-                            quality.append({
-                                "workspace_id": wid,
-                                "monitor_key": f"{asset_key[:40]}:knull_{kc[:16]}"[:64],
-                                "asset_key": asset_key,
-                                "rule_name": f"Key Null Rate ({kc})"[:64],
-                                "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],
-                                "passed": True,
-                                "pass_rate": 100.0,
-                                "observed_label": "0.00% null",
-                            })
+                    tbl_null_counts = _DELTA_TABLE_NULL_COUNTS_CACHE.get(abfss_path) or {}
+                    for kc in key_col_names:
+                        n_cnt = int(tbl_null_counts.get(kc, 0))
+                        n_pct = round(min(100.0, (n_cnt / row_count) * 100.0), 2)
+                        quality.append({
+                            "workspace_id": wid,
+                            "monitor_key": f"{asset_key[:40]}:knull_{kc[:16]}"[:64],
+                            "asset_key": asset_key,
+                            "rule_name": f"Key Null Rate ({kc})"[:64],
+                            "definition": f"{kc} IS NOT NULL (Daily Key Column)"[:128],
+                            "passed": n_pct <= 2.0,
+                            "pass_rate": round(100.0 - n_pct, 2),
+                            "observed_label": f"{n_pct:.2f}% null"[:32],
+                        })
 
                 q_total = len(asset_q)
                 q_pass = sum(1 for r in asset_q if r["passed"])
@@ -2044,13 +2101,19 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
         SECRET_NAME,
     )
 
-    rules_conn = open_fabric_sql_jdbc(spark, APP_SQL_SERVER, APP_SQL_DATABASE, sql_token)
+    user_quality_rules: list[dict] = []
+    prior_real_buckets: dict = {}
+    prior_columns: dict = {}
     try:
-        user_quality_rules = read_custom_quality_rules(rules_conn)
-        prior_real_buckets = read_existing_real_buckets(rules_conn)
-        prior_columns = read_existing_pub_columns(rules_conn)
-    finally:
-        rules_conn.close()
+        rules_conn = open_fabric_sql_jdbc(spark, APP_SQL_SERVER, APP_SQL_DATABASE, sql_token)
+        try:
+            user_quality_rules = read_custom_quality_rules(rules_conn)
+            prior_real_buckets = read_existing_real_buckets(rules_conn)
+            prior_columns = read_existing_pub_columns(rules_conn)
+        finally:
+            rules_conn.close()
+    except Exception as exc:
+        print("Warning: initial SQL read skipped, proceeding with live discovery:", exc)
 
     eff_tenant_id = TENANT_ID
     eff_client_id = CLIENT_ID

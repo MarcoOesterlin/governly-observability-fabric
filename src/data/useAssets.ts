@@ -113,21 +113,12 @@ function applyEffectiveSla(
 ): AssetItem {
   const effSla = resolveEffectiveSlaMinutes(a.id || a.name, a.slaMinutes, slaMap);
   const parsedLag = parseLagLabelToMinutes(a.fresh);
-  const hasExplicitAssetSla =
-    slaMap[a.id || a.name] !== undefined ||
-    slaMap[`domain:${(a.id || a.name).split(".")[0]}`] !== undefined;
-  const hasGlobalSla = slaMap["*"] !== undefined;
-  // Only force a healthy static table to late when an explicit per-asset or domain SLA was set;
-  // for global default SLA ('*'), allow relaxing a late table if parsedLag <= effSla without flipping static historical tables
+  const isFailed = a.fresh.toLowerCase().includes("fail");
   const isLate =
-    hasExplicitAssetSla && parsedLag !== null
-      ? parsedLag > effSla
-      : hasGlobalSla && a.late && parsedLag !== null
-        ? parsedLag > effSla
-        : a.late;
+    parsedLag !== null ? parsedLag > effSla : isFailed || a.late;
   const hasQualityScore = a.quality >= 0;
   const nextStatus =
-    (hasExplicitAssetSla || (hasGlobalSla && a.late !== isLate)) && parsedLag !== null
+    parsedLag !== null
       ? isLate
         ? parsedLag > effSla * 2 || (hasQualityScore && a.quality < 75)
           ? "critical"
