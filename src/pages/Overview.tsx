@@ -59,8 +59,11 @@ export function Overview({
   const warningCount = propWarningCount ?? liveStrip.distribution.warning;
   const criticalCount = propCriticalCount ?? liveStrip.distribution.critical;
   const assets = propAssets ?? liveAssets;
-  const incidentsTop = propIncidentsTop ?? liveIncidents.slice(0, 4);
-  const openIncidentCount = (propIncidentsTop ?? liveIncidents).filter((i) => i.status !== 'Resolved').length;
+  const activeIncidents = (propIncidentsTop ?? liveIncidents).filter(
+    (i) => i.status !== 'Resolved',
+  );
+  const incidentsTop = activeIncidents.slice(0, 4);
+  const openIncidentCount = activeIncidents.length;
   const derivedDomains =
     domains.length > 0
       ? domains
