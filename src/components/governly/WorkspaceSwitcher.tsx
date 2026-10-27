@@ -4,11 +4,12 @@ import { css } from "../../lib/css";
 import { Box } from "./Box";
 
 export function WorkspaceSwitcher() {
-  const { workspaceId, workspaces, setWorkspaceId } = useWorkspace();
+  const { workspaceId, workspaces, hasCompletedScan, setWorkspaceId } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const canFilter = hasCompletedScan && workspaces.length > 0;
   const isAll = !workspaceId || workspaceId === ALL_WORKSPACES_ID;
   const current = isAll
     ? null
@@ -40,13 +41,18 @@ export function WorkspaceSwitcher() {
       <Box
         as="button"
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        disabled={!canFilter}
+        onClick={() => {
+          if (canFilter) setOpen((o) => !o);
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        style={`width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer;border:1px solid ${
+        style={`width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:${
+          canFilter ? "pointer" : "not-allowed"
+        };opacity:${canFilter ? 1 : 0.65};border:1px solid ${
           open ? "var(--accent,#4f46e5)" : "var(--border2,#d4d4d8)"
         };background:var(--card2,#f4f4f5);color:var(--fg);text-align:left;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:border-color 0.15s,background 0.15s;`}
-        hover="border-color:var(--accent,#4f46e5);background:var(--sec,#ededf0)"
+        hover={canFilter ? "border-color:var(--accent,#4f46e5);background:var(--sec,#ededf0)" : ""}
       >
         <div
           style={css(
@@ -72,7 +78,11 @@ export function WorkspaceSwitcher() {
               "font-size:12.5px;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;"
             )}
           >
-            {isAll ? `All workspaces (${workspaces.length})` : (current?.display_name ?? "Select workspace")}
+            {!canFilter
+              ? "Run first scan in Settings"
+              : isAll
+                ? `All workspaces (${workspaces.length})`
+                : (current?.display_name ?? "Select workspace")}
           </div>
         </div>
         <div
@@ -84,7 +94,7 @@ export function WorkspaceSwitcher() {
         </div>
       </Box>
 
-      {open && (
+      {open && canFilter && (
         <div
           role="listbox"
           aria-label="Select monitored workspace"

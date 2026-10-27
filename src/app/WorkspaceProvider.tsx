@@ -1,7 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { client, getRuntimeWorkspaceId } from "../data/client";
-import { COMPUTE_CONFIG_EVENT, loadLocalComputeConfig } from "../data/useComputeConfig";
+import {
+  ALL_WORKSPACES_EVENT,
+  COMPUTE_CONFIG_EVENT,
+  loadCachedAllWorkspaces,
+  loadLocalComputeConfig,
+  saveCachedAllWorkspaces,
+} from "../data/useComputeConfig";
 
 export interface WorkspaceOption {
   workspace_id: string;
@@ -13,6 +19,8 @@ export interface WorkspaceOption {
 export interface WorkspaceContextValue {
   workspaceId: string | null;
   workspaces: WorkspaceOption[];
+  allWorkspaces: WorkspaceOption[];
+  hasCompletedScan: boolean;
   setWorkspaceId: (id: string) => void;
   status: "loading" | "ready" | "none";
   selectedDomain: string;
@@ -46,6 +54,8 @@ export function selectInitialWorkspace(
 const WorkspaceContext = createContext<WorkspaceContextValue>({
   workspaceId: ALL_WORKSPACES_ID,
   workspaces: [],
+  allWorkspaces: [],
+  hasCompletedScan: true,
   setWorkspaceId: () => undefined,
   status: "ready",
   selectedDomain: "All",
@@ -72,22 +82,40 @@ export function WorkspaceProvider({
   persistedWorkspaceId?: string | null;
   onPersist?: (id: string) => void;
 }) {
-  const [liveWorkspaces, setLiveWorkspaces] = useState<WorkspaceOption[]>(initialOptions ?? []);
+  const [liveWorkspaces, setLiveWorkspaces] = useState<WorkspaceOption[]>(
+    () => initialOptions ?? loadCachedAllWorkspaces()
+  );
   const [excludedIds, setExcludedIds] = useState<string[]>(
     () => loadLocalComputeConfig().excludedWorkspaceIds
   );
+  const [localHasScan, setLocalHasScan] = useState<boolean>(
+    () => initialOptions !== undefined || loadLocalComputeConfig().hasCompletedScan
+  );
+  const [dbHasScan, setDbHasScan] = useState<boolean>(initialOptions !== undefined);
   const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const onSync = () => setExcludedIds(loadLocalComputeConfig().excludedWorkspaceIds);
+    const onSync = () => {
+      const cfg = loadLocalComputeConfig();
+      setExcludedIds(cfg.excludedWorkspaceIds);
+      if (cfg.hasCompletedScan) setLocalHasScan(true);
+    };
+    const onAllWs = () => {
+      if (initialOptions === undefined) {
+        const cached = loadCachedAllWorkspaces();
+        if (cached.length > 0) setLiveWorkspaces(cached);
+      }
+    };
     window.addEventListener(COMPUTE_CONFIG_EVENT, onSync);
+    window.addEventListener(ALL_WORKSPACES_EVENT, onAllWs);
     window.addEventListener("storage", onSync);
     return () => {
       window.removeEventListener(COMPUTE_CONFIG_EVENT, onSync);
+      window.removeEventListener(ALL_WORKSPACES_EVENT, onAllWs);
       window.removeEventListener("storage", onSync);
     };
-  }, []);
+  }, [initialOptions]);
 
   const rawWorkspaces = initialOptions ?? liveWorkspaces;
   const activeWorkspaces = useMemo(() => {
@@ -96,6 +124,8 @@ export function WorkspaceProvider({
     const filtered = rawWorkspaces.filter((w) => !ex.has(w.workspace_id));
     return filtered.length > 0 ? filtered : rawWorkspaces;
   }, [rawWorkspaces, excludedIds, initialOptions]);
+
+  const hasCompletedScan = initialOptions !== undefined || localHasScan || dbHasScan;
 
   const refreshData = useCallback(() => {
     setRefreshTick((t) => t + 1);
@@ -169,16 +199,21 @@ export function WorkspaceProvider({
           role: "Admin",
           capacity_sku: w.capacity_sku ?? "F2",
         }));
+        const mergedAll = mapped.length > 0 ? saveCachedAllWorkspaces(mapped) : loadCachedAllWorkspaces();
+        if (mapped.length > 0) {
+          setDbHasScan(true);
+        }
         const saved = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-        const next = selectInitialWorkspace(mapped, saved);
-        setLiveWorkspaces(mapped);
+        const next = selectInitialWorkspace(mergedAll, saved);
+        setLiveWorkspaces(mergedAll);
         setWorkspaceIdState(next.workspaceId);
         setStatus(next.status);
       } catch {
         if (!cancelled) {
-          setLiveWorkspaces([]);
-          setWorkspaceIdState(null);
-          setStatus("none");
+          const fallback = loadCachedAllWorkspaces();
+          setLiveWorkspaces(fallback);
+          setWorkspaceIdState(fallback.length > 0 ? ALL_WORKSPACES_ID : null);
+          setStatus(fallback.length > 0 ? "ready" : "none");
         }
       }
     })();
@@ -186,6 +221,14 @@ export function WorkspaceProvider({
       cancelled = true;
     };
   }, [initialOptions, persistedWorkspaceId, refreshTick]);
+
+  // Keep workspaceId valid if user excludes the currently selected workspace
+  useEffect(() => {
+    if (initialOptions !== undefined || !workspaceId || workspaceId === ALL_WORKSPACES_ID) return;
+    if (activeWorkspaces.length > 0 && !activeWorkspaces.some((w) => w.workspace_id === workspaceId)) {
+      setWorkspaceIdState(ALL_WORKSPACES_ID);
+    }
+  }, [activeWorkspaces, initialOptions, workspaceId]);
 
   const setWorkspaceId = (id: string) => {
     setWorkspaceIdState(id);
@@ -218,6 +261,8 @@ export function WorkspaceProvider({
       value={{
         workspaceId,
         workspaces: activeWorkspaces,
+        allWorkspaces: rawWorkspaces,
+        hasCompletedScan,
         setWorkspaceId,
         status,
         selectedDomain,

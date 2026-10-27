@@ -812,6 +812,14 @@ def discover_and_profile_live_fabric(
             or float(r.get("threshold_pct") if r.get("threshold_pct") is not None else 100.0) <= 0
         )
     }
+    for r in (custom_rules or []):
+        if str(r.get("rule_type") or "") == "compute_config" and r.get("expression"):
+            try:
+                cfg = json.loads(str(r["expression"]))
+                for wid_ex in cfg.get("excludedWorkspaceIds") or []:
+                    excluded_ws_ids.add(str(wid_ex))
+            except Exception:
+                pass
 
     for w in ws_raw:
         if w.get("type") != "Workspace":
@@ -1627,9 +1635,11 @@ if "spark" in globals() and APP_SQL_SERVER and APP_SQL_DATABASE:
     eff_kv_uri = KEY_VAULT_URI
     eff_secret_name = SECRET_NAME
     for r in user_quality_rules:
-        if str(r.get("rule_type") or "") == "notebook_params" and r.get("expression"):
+        rtype = str(r.get("rule_type") or "")
+        if rtype in ("notebook_params", "compute_config") and r.get("expression"):
             try:
-                cfg = json.loads(str(r["expression"]))
+                raw_cfg = json.loads(str(r["expression"]))
+                cfg = raw_cfg.get("notebookParams") if rtype == "compute_config" and isinstance(raw_cfg.get("notebookParams"), dict) else raw_cfg
                 if cfg.get("tenantId"):
                     eff_tenant_id = str(cfg["tenantId"]).strip()
                 if cfg.get("clientId"):

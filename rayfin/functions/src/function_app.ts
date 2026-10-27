@@ -16,6 +16,7 @@ export interface ComputeNotebookResult {
   scheduleEnabled?: boolean;
   intervalMinutes?: number;
   jobStatus?: string;
+  workspacesJson?: string;
   message: string;
 }
 
@@ -170,7 +171,7 @@ udf.func(
     }
 
     // Default: 'status'
-    const [schedRes, jobsRes] = await Promise.all([
+    const [schedRes, jobsRes, wsListRes] = await Promise.all([
       fetch(
         `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/schedules?jobType=RunNotebook`,
         { headers: { Authorization: `Bearer ${token}` } },
@@ -179,6 +180,9 @@ udf.func(
         `${FABRIC_API}/workspaces/${workspaceId}/items/${notebookId}/jobs/instances`,
         { headers: { Authorization: `Bearer ${token}` } },
       ),
+      fetch(`${FABRIC_API}/workspaces`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
     ]);
 
     const schedData = schedRes.ok
@@ -195,6 +199,19 @@ udf.func(
           value?: Array<{ id: string; status?: string; startTimeUtc?: string; endTimeUtc?: string }>;
         })
       : { value: [] };
+    const wsListData = wsListRes.ok
+      ? ((await wsListRes.json()) as {
+          value?: Array<{ id: string; displayName?: string; type?: string; capacityId?: string }>;
+        })
+      : { value: [] };
+
+    const discoveredWorkspaces = (wsListData.value ?? [])
+      .filter((w) => w.type === 'Workspace' && Boolean(w.capacityId))
+      .map((w) => ({
+        workspace_id: w.id,
+        display_name: w.displayName || w.id,
+        capacity_sku: 'F2',
+      }));
 
     const firstSched = schedData.value?.[0];
     const latestJob = jobsData.value?.[0];
@@ -206,6 +223,7 @@ udf.func(
       scheduleEnabled: Boolean(firstSched?.enabled),
       intervalMinutes: Number(firstSched?.configuration?.interval || 36),
       jobStatus: latestJob?.status ?? 'Idle',
+      workspacesJson: JSON.stringify(discoveredWorkspaces),
       message: firstSched?.enabled
         ? `Scheduled every ${firstSched.configuration?.interval ?? 36}m`
         : 'Schedule paused (manual mode)',

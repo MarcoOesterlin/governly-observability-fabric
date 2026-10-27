@@ -21,7 +21,7 @@ import { css } from '../lib/css';
 
 export function Settings() {
   const { theme, toggle } = useTheme();
-  const { workspaces, casesEnabled, setCasesEnabled } = useWorkspace();
+  const { casesEnabled, setCasesEnabled } = useWorkspace();
   const [thresholds, setThresholds] = useSignalThresholds();
   const { slaMap, setSlaTarget, saving: slaSaving } = useFreshnessSlas();
   const defaultSlaMinutes = slaMap['*'] ?? 720;
@@ -52,7 +52,7 @@ export function Settings() {
     computeConfig.notebookParams.secretName,
   ]);
 
-  const workspaceChoices = allWorkspaces.length > 0 ? allWorkspaces : workspaces;
+  const workspaceChoices = allWorkspaces;
   const excludedSet = new Set(computeConfig.excludedWorkspaceIds);
   const includedCount = workspaceChoices.filter((w) => !excludedSet.has(w.workspace_id)).length;
 

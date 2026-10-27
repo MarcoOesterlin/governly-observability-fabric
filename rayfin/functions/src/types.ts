@@ -19,6 +19,6 @@
 export type AppFunctionsSchema = {
   manageComputeNotebook: {
     input: { hostWorkspaceId: string; action: string; scheduleEnabled: boolean; intervalMinutes: number };
-    output: { ok: boolean; workspaceId?: undefined | string; notebookId?: undefined | string; scheduleEnabled?: undefined | false | true; intervalMinutes?: undefined | number; jobStatus?: undefined | string; message: string };
+    output: { ok: boolean; workspaceId?: undefined | string; notebookId?: undefined | string; scheduleEnabled?: undefined | false | true; intervalMinutes?: undefined | number; jobStatus?: undefined | string; workspacesJson?: undefined | string; message: string };
   };
 };

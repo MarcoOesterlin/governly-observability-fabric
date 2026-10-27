@@ -66,8 +66,9 @@ export function Sidebar({
 }: SidebarProps = {}) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { selectedDomain, setSelectedDomain, casesEnabled } = useWorkspace();
+  const { selectedDomain, setSelectedDomain, casesEnabled, hasCompletedScan } = useWorkspace();
   const { allRows, domains } = useAssets();
+  const canFilterDomains = hasCompletedScan && domains.length > 0 && allRows.length > 0;
   const steward = useCurrentSteward();
   const [domainMenuOpen, setDomainMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -205,59 +206,65 @@ export function Sidebar({
             </Box>
           );
         })}
-        {domains.length > 0 && (
-          <div style={css('padding:14px 4px 6px;')}>
-            <div ref={domainContainerRef} style={css('position:relative;width:100%;')}>
-              <Box
-                as="button"
-                type="button"
-                onClick={() => setDomainMenuOpen((o) => !o)}
-                aria-haspopup="listbox"
-                aria-expanded={domainMenuOpen}
-                style={`width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer;border:1px solid ${
-                  domainMenuOpen ? 'var(--accent,#4f46e5)' : 'var(--border2,#d4d4d8)'
-                };background:var(--card2,#f4f4f5);color:var(--fg);text-align:left;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:border-color 0.15s,background 0.15s;`}
-                hover="border-color:var(--accent,#4f46e5);background:var(--sec,#ededf0)"
+        <div style={css('padding:14px 4px 6px;')}>
+          <div ref={domainContainerRef} style={css('position:relative;width:100%;')}>
+            <Box
+              as="button"
+              type="button"
+              disabled={!canFilterDomains}
+              onClick={() => {
+                if (canFilterDomains) setDomainMenuOpen((o) => !o);
+              }}
+              aria-haspopup="listbox"
+              aria-expanded={domainMenuOpen}
+              style={`width:100%;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:${
+                canFilterDomains ? 'pointer' : 'not-allowed'
+              };opacity:${canFilterDomains ? 1 : 0.65};border:1px solid ${
+                domainMenuOpen ? 'var(--accent,#4f46e5)' : 'var(--border2,#d4d4d8)'
+              };background:var(--card2,#f4f4f5);color:var(--fg);text-align:left;box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:border-color 0.15s,background 0.15s;`}
+              hover={canFilterDomains ? 'border-color:var(--accent,#4f46e5);background:var(--sec,#ededf0)' : ''}
+            >
+              <div
+                style={css(
+                  'width:28px;height:28px;border-radius:7px;background:color-mix(in srgb,var(--accent,#4f46e5) 12%,transparent);color:var(--accent,#4f46e5);display:flex;align-items:center;justify-content:center;flex:0 0 auto;'
+                )}
               >
+                <i
+                  className={`ph ${isAllDomains ? 'ph-circles-four' : 'ph-tag'}`}
+                  style={css('font-size:15px;')}
+                  aria-hidden="true"
+                />
+              </div>
+              <div style={css('flex:1;min-width:0;')}>
                 <div
                   style={css(
-                    'width:28px;height:28px;border-radius:7px;background:color-mix(in srgb,var(--accent,#4f46e5) 12%,transparent);color:var(--accent,#4f46e5);display:flex;align-items:center;justify-content:center;flex:0 0 auto;'
+                    'font-size:9.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--fgs,#71717a);line-height:1.1;'
                   )}
                 >
-                  <i
-                    className={`ph ${isAllDomains ? 'ph-circles-four' : 'ph-tag'}`}
-                    style={css('font-size:15px;')}
-                    aria-hidden="true"
-                  />
+                  Domain filter
                 </div>
-                <div style={css('flex:1;min-width:0;')}>
-                  <div
-                    style={css(
-                      'font-size:9.5px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--fgs,#71717a);line-height:1.1;'
-                    )}
-                  >
-                    Domain filter
-                  </div>
-                  <div
-                    style={css(
-                      'font-size:12.5px;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;'
-                    )}
-                  >
-                    {isAllDomains
-                      ? `All domains (${domains.length})`
+                <div
+                  style={css(
+                    'font-size:12.5px;color:var(--fg);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;'
+                  )}
+                >
+                  {!canFilterDomains
+                    ? 'Run first scan in Settings'
+                    : isAllDomains
+                      ? `All assets (${allRows.length})`
                       : `${selectedDomain} (${activeDomainCount} asset${activeDomainCount === 1 ? '' : 's'})`}
-                  </div>
                 </div>
-                <div
-                  style={css(
-                    'width:22px;height:22px;border-radius:6px;background:var(--card,#fff);border:1px solid var(--border,#e4e4e7);display:flex;align-items:center;justify-content:center;flex:0 0 auto;color:var(--fgm);'
-                  )}
-                >
-                  <i className="ph ph-caret-up-down" style={css('font-size:12px;')} aria-hidden="true" />
-                </div>
-              </Box>
+              </div>
+              <div
+                style={css(
+                  'width:22px;height:22px;border-radius:6px;background:var(--card,#fff);border:1px solid var(--border,#e4e4e7);display:flex;align-items:center;justify-content:center;flex:0 0 auto;color:var(--fgm);'
+                )}
+              >
+                <i className="ph ph-caret-up-down" style={css('font-size:12px;')} aria-hidden="true" />
+              </div>
+            </Box>
 
-              {domainMenuOpen && (
+            {domainMenuOpen && canFilterDomains && (
                 <div
                   role="listbox"
                   aria-label="Select domain"
@@ -345,7 +352,6 @@ export function Sidebar({
               )}
             </div>
           </div>
-        )}
       </div>
       <div ref={userMenuRef} style={css('position:relative;border-top:1px solid var(--border,#e7e7ea);')}>
         <Box
