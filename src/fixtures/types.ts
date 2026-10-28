@@ -93,9 +93,13 @@ export type LineageNodeFixture = {
 
 export type ImpactFixture = {
   name: string;
+  assetKey?: string;
   type: string;
   icon: string;
   sev: "Critical" | "High" | "Medium" | "Low";
+  hops?: number;
+  impactSummary?: string;
+  impactConsequence?: string;
 };
 
 export type CommentFixture = {

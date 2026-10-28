@@ -270,6 +270,7 @@ export function useIncidentDetailData(incidentId?: string): {
       const isAll = workspaceId === ALL_WORKSPACES_ID;
       const baseImpact = client.data.PubIncidentImpact.select([
         "hops",
+        "impacted_asset_key",
         "impacted_name",
         "impacted_type",
         "impact_severity",
@@ -290,14 +291,35 @@ export function useIncidentDetailData(incidentId?: string): {
         Array.isArray(impactRows) && impactRows.length > 0
           ? [...impactRows]
               .sort((a, b) => a.hops - b.hops)
-              .map((r) => ({
-                name: r.impacted_name,
-                type: r.impacted_type,
-                icon: r.impacted_type.toLowerCase().includes("report")
+              .map((r) => {
+                const tLower = String(r.impacted_type ?? "").toLowerCase();
+                const icon = tLower.includes("report")
                   ? "ph-chart-bar"
-                  : "ph-table",
-                sev: (r.impact_severity as ImpactFixture["sev"]) ?? "Medium",
-              }))
+                  : tLower.includes("model")
+                    ? "ph-cube"
+                    : tLower.includes("pipeline")
+                      ? "ph-git-branch"
+                      : tLower.includes("notebook")
+                        ? "ph-notebook"
+                        : "ph-table";
+                const rawSev = String(r.impact_severity ?? "Medium").toLowerCase();
+                const sev: ImpactFixture["sev"] =
+                  rawSev === "critical"
+                    ? "Critical"
+                    : rawSev === "high"
+                      ? "High"
+                      : rawSev === "low"
+                        ? "Low"
+                        : "Medium";
+                return {
+                  name: r.impacted_name,
+                  assetKey: r.impacted_asset_key || r.impacted_name,
+                  type: r.impacted_type,
+                  icon,
+                  sev,
+                  hops: typeof r.hops === "number" ? r.hops : 1,
+                };
+              })
           : [];
       const comments: CommentFixture[] =
         Array.isArray(commentRows) && commentRows.length > 0

@@ -26,7 +26,11 @@ const SEV: Record<string, Pair> = {
   Medium: ['var(--warn)', 'var(--warnb)'],
   Low: ['var(--info)', 'var(--infob)'],
 };
-export const sevPair = (s: string): Pair => SEV[s] ?? SEV.Low;
+export const sevPair = (s: string): Pair => {
+  if (!s) return SEV.Low;
+  const norm = s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  return SEV[norm] ?? SEV.Low;
+};
 
 const STATUS: Record<string, Pair> = {
   Open: ['var(--crit)', 'var(--critb)'],

@@ -9,6 +9,7 @@ import { client } from '../data/client';
 import { invalidateQueryCache } from '../data/queryCache';
 import { syncCaseStatusFromIncident } from '../data/useCaseActions';
 import { useCurrentSteward } from '../data/useCurrentSteward';
+import { useAssets, type AssetItem } from '../data/useAssets';
 import { useIncidentDetailData } from '../data/useIncidents';
 import type {
   CommentFixture,
@@ -72,6 +73,149 @@ function buildTimeline(inc: IncidentFixture, status: IncidentFixture['status']):
   return events;
 }
 
+function describeDownstreamImpact(
+  inc: IncidentFixture,
+  item: ImpactFixture,
+  allImpacts: ImpactFixture[],
+): {
+  category: string;
+  whatIsImpacted: string;
+  consequence: string;
+  hopLabel: string;
+  pathNodes: string[];
+} {
+  const monitor = String(inc.monitorType ?? inc.monitor ?? 'Freshness').toLowerCase();
+  const typeLower = String(item.type ?? '').toLowerCase();
+  const srcAsset = inc.asset && inc.asset !== 'N/A' ? inc.asset : 'upstream asset';
+  const obs = inc.observed && inc.observed !== 'N/A' ? inc.observed : 'threshold exceeded';
+  const target = inc.slaTarget ?? '24h';
+  const hops = item.hops ?? (typeLower.includes('report') ? 3 : typeLower.includes('model') ? 2 : 1);
+
+  const hop1 = allImpacts.find((x) => (x.hops ?? 1) === 1 && x.name !== item.name);
+  const hop2 = allImpacts.find((x) => x.hops === 2 && x.name !== item.name);
+  const pathNodes: string[] = [srcAsset];
+  if (hops >= 2 && hop1) pathNodes.push(hop1.name);
+  if (hops >= 3 && hop2 && !pathNodes.includes(hop2.name)) pathNodes.push(hop2.name);
+  if (!pathNodes.includes(item.name)) pathNodes.push(item.name);
+
+  const hopLabel =
+    hops <= 1
+      ? 'Direct consumer (1 hop)'
+      : `Transitive consumer (${hops} hops)`;
+
+  if (item.impactSummary) {
+    return {
+      category: 'Downstream dependency',
+      whatIsImpacted: item.impactSummary,
+      consequence: item.impactConsequence ?? `Downstream consumers of ${item.name} are affected until ${srcAsset} recovers.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+
+  if (monitor.includes('schema')) {
+    if (typeLower.includes('report') || typeLower.includes('dashboard')) {
+      return {
+        category: 'Visual & filter binding risk',
+        whatIsImpacted: `Report visuals, slicers, and measures in ${item.name} depend on columns from ${srcAsset} (${obs}).`,
+        consequence: `Visuals referencing modified or dropped fields may fail to render or display query errors to viewers.`,
+        hopLabel,
+        pathNodes,
+      };
+    }
+    if (typeLower.includes('model')) {
+      return {
+        category: 'Semantic model binding risk',
+        whatIsImpacted: `Direct Lake / model table bindings and DAX measures in ${item.name} reference ${srcAsset} (${obs}).`,
+        consequence: `Model framing or scheduled refresh may fail with column resolution or data type mismatch errors.`,
+        hopLabel,
+        pathNodes,
+      };
+    }
+    return {
+      category: 'Downstream query & schema risk',
+      whatIsImpacted: `Downstream table ${item.name} ingests or joins against ${srcAsset}, which has schema drift (${obs}).`,
+      consequence: `Spark/SQL writes into ${item.name} risk AnalysisException errors, null projections, or implicit type truncation.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+
+  if (monitor.includes('quality')) {
+    if (typeLower.includes('report') || typeLower.includes('dashboard')) {
+      return {
+        category: 'Inaccurate report KPIs',
+        whatIsImpacted: `Charts and KPI cards in ${item.name} aggregate data originating from ${srcAsset} (${obs}).`,
+        consequence: `Report consumers may see skewed totals, duplicate counts, or unmapped (Blank) filter categories.`,
+        hopLabel,
+        pathNodes,
+      };
+    }
+    if (typeLower.includes('model')) {
+      return {
+        category: 'Skewed DAX measures & blank keys',
+        whatIsImpacted: `Semantic model ${item.name} consumes unvalidated rows from ${srcAsset} (${obs}).`,
+        consequence: `Model relationships may surface (Blank) dimension rows and inaccurate measure aggregations.`,
+        hopLabel,
+        pathNodes,
+      };
+    }
+    return {
+      category: 'Propagated data quality defect',
+      whatIsImpacted: `Failing records in ${srcAsset} (${obs}) flow into downstream joins and transformations on ${item.name}.`,
+      consequence: `Joins against ${srcAsset} risk duplicate fan-out, unjoined NULL foreign keys, or corrupted table aggregates.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+
+  if (monitor.includes('pipeline') || monitor.includes('volume')) {
+    return {
+      category: 'Blocked upstream data feed',
+      whatIsImpacted: `Upstream workload issue on ${srcAsset} (${obs}) blocks fresh data propagation to ${item.name}.`,
+      consequence: `${item.name} remains pinned to its previous snapshot until ${srcAsset} completes a healthy execution.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+
+  // Default: Freshness SLA breach
+  if (typeLower.includes('report') || typeLower.includes('dashboard')) {
+    return {
+      category: 'Stale report visuals & KPIs',
+      whatIsImpacted: `Visuals, filters, and KPI cards in ${item.name} rely on upstream data from ${srcAsset} (current lag ${obs} vs ${target} SLA).`,
+      consequence: `Business users viewing ${item.name} see outdated figures from the last load until ${srcAsset} is refreshed.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+  if (typeLower.includes('model')) {
+    return {
+      category: 'Stale Direct Lake / DAX measures',
+      whatIsImpacted: `Semantic model ${item.name} depends on ${srcAsset}, which is ${obs} behind its ${target} freshness SLA.`,
+      consequence: `DAX measures, time-intelligence calculations, and dimension slicers in ${item.name} reflect stale upstream records.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+  if (typeLower.includes('table')) {
+    return {
+      category: 'Stale join & lookup records',
+      whatIsImpacted: `Queries and merges on ${item.name} joining against ${srcAsset} read stale records (lag ${obs} vs ${target} SLA).`,
+      consequence: `New fact transactions in ${item.name} may join against outdated dimension attributes or miss recently added keys.`,
+      hopLabel,
+      pathNodes,
+    };
+  }
+  return {
+    category: 'Downstream data staleness',
+    whatIsImpacted: `${item.name} (${item.type}) consumes upstream data from ${srcAsset} (lag ${obs} vs ${target} SLA).`,
+    consequence: `Downstream outputs and dependent workloads operate on stale data until ${srcAsset} refreshes.`,
+    hopLabel,
+    pathNodes,
+  };
+}
+
 const primaryBtn =
   'height:38px;border-radius:9px;border:1px solid transparent;background:var(--accent);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;width:100%';
 const secBtn =
@@ -106,6 +250,7 @@ export function IncidentDetail({
   const steward = useCurrentSteward();
 
   const live = useIncidentDetailData(incidentKey);
+  const { allRows: allAssets = [] } = useAssets();
   const baseInc = propIncident ?? live.incident;
   const impact = propImpact ?? live.impact;
   const [localStatus, setLocalStatus] = useState<IncidentFixture['status'] | null>(null);
@@ -382,16 +527,113 @@ export function IncidentDetail({
             )}
             {impact.map((m) => {
               const p = sevPair(m.sev);
+              const details = describeDownstreamImpact(baseInc, m, impact);
+              const targetKeyLower = String(m.assetKey || m.name || '').toLowerCase();
+              const matchedAsset: AssetItem | undefined = allAssets.find((a) => {
+                const aid = String(a.id || '').toLowerCase();
+                const aname = String(a.name || '').toLowerCase();
+                const ashort = aid.includes('.') ? aid.split('.').pop()! : aid;
+                return (
+                  aid === targetKeyLower ||
+                  aname === targetKeyLower ||
+                  ashort === targetKeyLower
+                );
+              });
               return (
-                <div key={m.name} style={css('display:flex;align-items:center;gap:11px;padding:12px 18px;border-bottom:1px solid var(--border,#e7e7ea);')}>
-                  <div style={css('width:30px;height:30px;border-radius:8px;background:var(--card2,#f4f4f5);display:flex;align-items:center;justify-content:center;color:var(--fgm);font-size:15px;')}>
-                    <i className={`ph ${m.icon}`} aria-hidden="true" />
+                <div
+                  key={m.name}
+                  style={css(
+                    'display:flex;flex-direction:column;gap:8px;padding:14px 18px;border-bottom:1px solid var(--border,#e7e7ea);',
+                  )}
+                >
+                  <div style={css('display:flex;align-items:center;gap:11px;')}>
+                    <div
+                      style={css(
+                        'width:30px;height:30px;border-radius:8px;background:var(--card2,#f4f4f5);display:flex;align-items:center;justify-content:center;color:var(--fgm);font-size:15px;flex-shrink:0;',
+                      )}
+                    >
+                      <i className={`ph ${m.icon}`} aria-hidden="true" />
+                    </div>
+                    <div style={css('flex:1;min-width:0;')}>
+                      <div style={css('display:flex;align-items:center;gap:8px;flex-wrap:wrap;')}>
+                        {matchedAsset ? (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/assets/${encodeURIComponent(matchedAsset.id)}`)}
+                            style={css(
+                              'padding:0;border:none;background:none;font-size:13px;font-weight:600;color:var(--accent,#4f46e5);cursor:pointer;text-align:left;',
+                            )}
+                          >
+                            {m.name} ↗
+                          </button>
+                        ) : (
+                          <div style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{m.name}</div>
+                        )}
+                        <span
+                          style={css(
+                            'font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;background:var(--card2,#f4f4f5);color:var(--fgm,#52525b);',
+                          )}
+                        >
+                          {details.category}
+                        </span>
+                      </div>
+                      <div style={css('font-size:11.5px;color:var(--fgm);margin-top:1px;')}>
+                        {m.type} · {details.hopLabel}
+                      </div>
+                    </div>
+                    <span style={badge(p[0], p[1])}>{m.sev.toLowerCase()} impact</span>
                   </div>
-                  <div style={css('flex:1;')}>
-                    <div style={css('font-size:13px;font-weight:600;color:var(--fg);')}>{m.name}</div>
-                    <div style={css('font-size:11.5px;color:var(--fgm);')}>{m.type}</div>
+
+                  <div
+                    style={css(
+                      'margin-left:41px;padding:10px 12px;border-radius:8px;background:var(--card2,#f8f8fa);border:1px solid var(--border,#e7e7ea);display:flex;flex-direction:column;gap:5px;',
+                    )}
+                  >
+                    <div style={css('font-size:12.5px;color:var(--fg,#18181b);line-height:1.45;')}>
+                      <b style={css('font-weight:600;')}>Impact:</b> {details.whatIsImpacted}
+                    </div>
+                    <div style={css('font-size:12px;color:var(--fgm,#52525b);line-height:1.45;')}>
+                      <b style={css('font-weight:600;color:var(--fg,#18181b);')}>Effect on consumers:</b>{' '}
+                      {details.consequence}
+                    </div>
+                    <div
+                      style={css(
+                        'display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:3px;padding-top:6px;border-top:1px dashed var(--border,#e7e7ea);font-size:11.5px;color:var(--fgm,#52525b);',
+                      )}
+                    >
+                      <span style={css("font-family:'Geist Mono',monospace;font-size:11px;")}>
+                        Path: {details.pathNodes.join(' -> ')}
+                      </span>
+                      {matchedAsset && (
+                        <span style={css('display:inline-flex;align-items:center;gap:8px;')}>
+                          <span>
+                            Asset status:{' '}
+                            <b
+                              style={css(
+                                `color:${
+                                  matchedAsset.status === 'critical'
+                                    ? 'var(--crit,#dc2626)'
+                                    : matchedAsset.status === 'warning'
+                                      ? 'var(--warn,#d97706)'
+                                      : 'var(--ok,#059669)'
+                                };`,
+                              )}
+                            >
+                              {matchedAsset.status}
+                            </b>
+                          </span>
+                          {matchedAsset.fresh && matchedAsset.fresh !== 'N/A' && (
+                            <span>· Freshness: {matchedAsset.fresh}</span>
+                          )}
+                          {matchedAsset.rowCountLabel &&
+                            matchedAsset.rowCountLabel !== 'N/A' &&
+                            matchedAsset.rowCountLabel !== 'Model' && (
+                              <span>· Rows: {matchedAsset.rowCountLabel}</span>
+                            )}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <span style={badge(p[0], p[1])}>{m.sev} impact</span>
                 </div>
               );
             })}
