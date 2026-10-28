@@ -79,7 +79,7 @@ export function toAssetFixture(row: PubAssetRow): AssetFixture {
   const domainRaw = row.domain_name ?? row.domain_key ?? "Finance";
   const domain = domainRaw.charAt(0).toUpperCase() + domainRaw.slice(1);
   const rawQuality = row.quality_pct !== undefined ? row.quality_pct : row.quality_score;
-  const fresh = row.freshness_label ?? row.lag_label ?? "—";
+  const fresh = row.freshness_label ?? row.lag_label ?? "N/A";
   const late =
     row.is_late !== undefined
       ? row.is_late

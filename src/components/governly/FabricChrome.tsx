@@ -222,7 +222,7 @@ export function FabricChrome({
           onClick={handleReloadTelemetry}
           title={
             lastRun
-              ? `Last notebook sync: ${lastRun.label} (${lastRun.status}) — click to reload live data`
+              ? `Last notebook sync: ${lastRun.label} (${lastRun.status}) - click to reload live data`
               : 'Click to reload live workspace telemetry'
           }
           style={`height:26px;padding:0 10px;border-radius:99px;border:1px solid ${
@@ -362,7 +362,7 @@ export function FabricChrome({
               {openIncidents.length === 0 && schemaChanges.length === 0 ? (
                 <div style={css('padding:24px 16px;text-align:center;color:var(--fgm);font-size:12.5px;')}>
                   <i className="ph ph-check-circle" style={css('font-size:24px;color:var(--ok);display:block;margin-bottom:6px;')} aria-hidden="true" />
-                  All clear — no open incidents or breaking schema changes.
+                  All clear - no open incidents or breaking schema changes.
                 </div>
               ) : (
                 <>

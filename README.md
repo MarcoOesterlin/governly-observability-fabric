@@ -2,7 +2,7 @@
 
 Governly is a native, 100% tenant-resident **Microsoft Fabric Data Observability** application built with the **Rayfin SDK** (`@microsoft/rayfin-client`, `@microsoft/rayfin-core`, `@microsoft/rayfin-functions`, `@microsoft/rayfin-cli`), **React 19**, **TypeScript**, **Data API Builder (DAB) GraphQL**, and **PySpark**.
 
-It provides zero-plumbing discovery, live telemetry, and interactive governance across **Lakehouse Delta tables, Data Warehouses, Semantic Models, Data Pipelines, and Spark Notebooks**—running entirely inside your Microsoft Fabric workspace.
+It provides zero-plumbing discovery, live telemetry, and interactive governance across **Lakehouse Delta tables, Data Warehouses, Semantic Models, Data Pipelines, and Spark Notebooks**, running entirely inside your Microsoft Fabric workspace.
 
 ---
 
@@ -32,7 +32,7 @@ It provides zero-plumbing discovery, live telemetry, and interactive governance 
    - [Application Pages (`src/pages/*.tsx`)](#2-application-pages-srcpagestsx)
    - [Domain Components & Asset Tabs (`src/components/`)](#3-domain-components--asset-tabs-srccomponents)
    - [Data Hooks, State Merging & Caching Engine (`src/data/` & `src/lib/`)](#4-data-hooks-state-merging--caching-engine-srcdata--srclib)
-   - [Rayfin Database Schema — All 25 SQL Entities (`rayfin/data/`)](#5-rayfin-database-schema--all-25-sql-entities-rayfindata)
+   - [Rayfin Database Schema: All 25 SQL Entities (`rayfin/data/`)](#5-rayfin-database-schema-all-25-sql-entities-rayfindata)
    - [Rayfin User Data Functions Control Plane (`rayfin/functions/`)](#6-rayfin-user-data-functions-control-plane-rayfinfunctions)
    - [Fabric PySpark Notebooks (`fabric/`)](#7-fabric-pyspark-notebooks-fabric)
 4. [Deep-Dive Feature Mechanics](#deep-dive-feature-mechanics)
@@ -149,7 +149,7 @@ Governly is architected around a **Hybrid Publish + Interactive Overlay Pattern*
 | `src/pages/Overview.tsx` | `#/` | **Executive & Steward Overview Dashboard:** Displays the top health signal bar (`DataAsOf`), 4 headline KPI cards (**Healthy assets**, **Open incidents**, **Freshness SLA**, **Quality checks** with `N/A` support when 0 checks are configured), a 7-day stacked **Asset Health History** bar chart + distribution breakdown (`HealthCard`), **Open Incidents** triage list (`IncidentsCard`), **Recent Schema Drift** (`SchemaChangesCard`), and **Monitored Data Assets** table (`AssetsCard`). |
 | `src/pages/Assets.tsx` | `#/assets` | **Monitored Data Assets Catalog:** Lists all monitored **Data Assets & Data Products** (Lakehouse tables, Warehouses, Semantic Models; excludes runtime-only pipelines/notebooks). Supports filtering by health status (`All`, `Healthy`, `Warning`, `Critical`), asset type (`Tables`, `Models`), and column sorting. |
 | `src/pages/AssetDetail.tsx` | `#/assets/:id` | **Single Asset 360° Observability View:** Header with asset badge, workspace/domain metadata, steward owner, SLA status, and 6 specialized tabs: **Overview**, **Freshness**, **Quality**, **Schema**, **Incidents**, and **Lineage & Impact**. |
-| `src/pages/Freshness.tsx` | `#/freshness` | **Pipelines, Notebooks & Freshness Monitor:** Unified runtime & freshness command center covering both **Data Assets** and **Runtime Jobs** (Spark Notebooks & Data Pipelines—including the host workspace's own notebooks). Features:<ul><li>KPI summary cards (SLA compliance, late assets, failed jobs, **Expected Landing Time** status).</li><li>**Failed Runtime Jobs & Blast Radius Diagnostics:** Expandable cards showing exact Spark/Pipeline failure reason, **Upstream Sources** & **Downstream Impacted Objects**, and remediation steps.</li><li>**Row Count Drift (Start vs. After Processing) & Operational Metadata** table across recent runs.</li><li>Interactive **Freshness SLA** and **Expected Landing Time (`HH:MM`)** inline editors.</li></ul> |
+| `src/pages/Freshness.tsx` | `#/freshness` | **Pipelines, Notebooks & Freshness Monitor:** Unified runtime & freshness command center covering both **Data Assets** and **Runtime Jobs** (Spark Notebooks & Data Pipelines, including the host workspace's own notebooks). Features:<ul><li>KPI summary cards (SLA compliance, late assets, failed jobs, **Expected Landing Time** status).</li><li>**Failed Runtime Jobs & Blast Radius Diagnostics:** Expandable cards showing exact Spark/Pipeline failure reason, **Upstream Sources** & **Downstream Impacted Objects**, and remediation steps.</li><li>**Row Count Drift (Start vs. After Processing) & Operational Metadata** table across recent runs.</li><li>Interactive **Freshness SLA** and **Expected Landing Time (`HH:MM`)** inline editors.</li></ul> |
 | `src/pages/Quality.tsx` | `#/quality` | **Data Quality Command Center & Rule Studio:** Aggregates quality pass rates across all monitored tables, groups rules by the **7 Data Quality Dimensions** (`Completeness`, `Uniqueness`, `Validity`, `Accuracy`, `Consistency`, `Timeliness`, `Volume / Drift`), displays failed-row samples, and embeds the **Quality Rule Studio** modal for creating or deleting rules with instant optimistic UI updates + background SQL cleanup. |
 | `src/pages/SchemaDrift.tsx` | `#/schema` | **Schema Drift Explorer:** Lists all detected DDL changes (`added`, `removed`, `type_changed`) across OneLake Delta tables, classifying changes into **Breaking** vs. **Additive/Non-breaking** with copyable remediation SQL (`ALTER TABLE ...`). |
 | `src/pages/Incidents.tsx` | `#/incidents` | **Incident Triage Queue:** Filterable queue of active, acknowledged, snoozed, and resolved observability incidents across `Freshness`, `Quality`, `Schema`, and `Volume`, with bulk/inline **Acknowledge**, **Snooze 1h**, **Assign to Me**, and **Resolve** actions. |
@@ -220,11 +220,11 @@ Governly is architected around a **Hybrid Publish + Interactive Overlay Pattern*
 
 ---
 
-### 5. Rayfin Database Schema — All 25 SQL Entities (`rayfin/data/`)
+### 5. Rayfin Database Schema: All 25 SQL Entities (`rayfin/data/`)
 
 All 25 tables are defined using TC39 stage-3 decorators in `rayfin/data/` and deployed automatically to the workspace's native Fabric SQL Database (`governly`) via Data API Builder (DAB).
 
-#### A. Interactive Governance & Configuration Entities (8 Tables — Read/Write `@authenticated('*')`)
+#### A. Interactive Governance & Configuration Entities (8 Tables - Read/Write `@authenticated('*')`)
 
 | Entity Class | SQL Table | File | Purpose |
 | :--- | :--- | :--- | :--- |
@@ -237,7 +237,7 @@ All 25 tables are defined using TC39 stage-3 decorators in `rayfin/data/` and de
 | `AppUser` | `dbo.AppUsers` | `rayfin/data/app-user.ts` | Registered application stewards populated via Entra ID SSO (`sub`, `email`, `display_name`, `role`). |
 | `UserPreference` | `dbo.UserPreferences` | `rayfin/data/user-preference.ts` | Per-user UI preferences (default workspace, theme, notification settings). |
 
-#### B. Published Telemetry Entities (17 Tables — Populated by `nb_governly_compute_publish`)
+#### B. Published Telemetry Entities (17 Tables - Populated by `nb_governly_compute_publish`)
 
 | Entity Class | SQL Table | File | Purpose |
 | :--- | :--- | :--- | :--- |
@@ -285,25 +285,25 @@ All 25 tables are defined using TC39 stage-3 decorators in `rayfin/data/` and de
 #### A. Telemetry & Quality Scanner: `fabric/notebooks/nb_governly_compute_publish.py` (`.ipynb`)
 This is the core PySpark observability engine that runs on schedule (default every 36 minutes) or on demand from **Settings**:
 
-1. **Stage 1 — Configuration & Token Acquisition:**
+1. **Stage 1 - Configuration & Token Acquisition:**
    - Connects to the workspace's Fabric SQL Database (`governly`) using `notebookutils.credentials.getToken("https://database.windows.net/")`.
    - Reads `compute_config` (monitored workspace IDs), `freshness_sla` overrides, `landing_time_sla` overrides, `notebook_params` (optional Key Vault SPN credentials), and active user-defined `QualityRules` from `dbo.QualityRules`.
-2. **Stage 2 — Zero-Plumbing Workspace & Item Discovery:**
+2. **Stage 2 - Zero-Plumbing Workspace & Item Discovery:**
    - Queries the Fabric REST API (`GET /v1/workspaces` and `GET /v1/workspaces/{id}/items`) across all selected monitored workspaces to discover Lakehouses, Warehouses, Semantic Models, Data Pipelines, and Spark Notebooks, plus workspace steward role assignments.
-3. **Stage 3 — OneLake Delta Table & `_delta_log` Profiling:**
+3. **Stage 3 - OneLake Delta Table & `_delta_log` Profiling:**
    - Reads Delta tables directly via `abfss://<workspaceId>@onelake.dfs.fabric.microsoft.com/<lakehouseId>/Tables/<tableName>`.
    - Runs `DESCRIBE DETAIL` and `DESCRIBE HISTORY LIMIT 14` to capture exact commit timestamps, total row counts, storage sizes, and 48-hour commit lag points (`dbo.PubAssetLagPoints`).
    - Distinguishes actively refreshed tables from static historical reference/dimension tables so historical sample tables aren't falsely marked late unless an explicit SLA rule targets them.
-4. **Stage 4 — Row Count Drift (Before vs. After) & Daily Key-Column Null Rates:**
+4. **Stage 4 - Row Count Drift (Before vs. After) & Daily Key-Column Null Rates:**
    - Extracts `operationMetrics` from the latest Delta history commits (`operation`, `numTargetRowsInserted`, `numTargetRowsUpdated`, `numTargetRowsDeleted`, `numOutputRows`) and compares the latest row count (`After`) against the prior commit's row count (`Start`), publishing a `Row count drift (Start vs After)` check row to `dbo.PubQualityResults`.
    - Identifies up to 4 key columns per table (`*_id`, `*_key`, `*_code`, `*_date`, or leading columns) and executes a **single consolidated Spark SQL aggregation pass** (`SUM(CASE WHEN col IS NULL THEN 1 ELSE 0 END)`) to publish `Null rate · <col>` checks to `dbo.PubQualityResults`.
-5. **Stage 5 — 7-Dimension Data Quality Rule Execution & Failed Row Sampling:**
+5. **Stage 5 - 7-Dimension Data Quality Rule Execution & Failed Row Sampling:**
    - Evaluates all enabled user rules from `dbo.QualityRules` (`Completeness`, `Uniqueness`, `Validity`, `Accuracy`, `Consistency`, `Timeliness`, `Volume / Drift`) via Spark SQL, computing pass rates and capturing up to 25 failing sample rows (`dbo.PubQualityFailedRows`).
-6. **Stage 6 — Schema Snapshot & Drift Detection:**
+6. **Stage 6 - Schema Snapshot & Drift Detection:**
    - Compares each table's current column catalog against the previous snapshot in `dbo.PubAssetColumns`, recording added columns, dropped columns (`breaking = true`), and data type changes (`breaking = true`) into `dbo.PubSchemaChanges`.
-7. **Stage 7 — Lineage & Failure Blast Radius Construction:**
+7. **Stage 7 - Lineage & Failure Blast Radius Construction:**
    - Builds upstream/downstream dependency edges (`dbo.PubLineageEdges`) linking bronze → silver → gold tables, pipelines, notebooks, and semantic models, and generates `dbo.PubIncidents` + `dbo.PubIncidentImpacts` for any SLA breaches, DQ failures, or breaking schema changes.
-8. **Stage 8 — Atomic SQL Publish:**
+8. **Stage 8 - Atomic SQL Publish:**
    - Truncates and batch-inserts the refreshed `dbo.Pub*` tables inside the Fabric SQL Database while preserving all interactive steward tables (`dbo.IncidentStates`, `dbo.StewardCases`, `dbo.QualityRules`, etc.).
 
 #### B. One-Click Bootstrap Installer: `fabric/bootstrap/nb_governly_installer.py` (`.ipynb`)

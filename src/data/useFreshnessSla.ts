@@ -339,7 +339,7 @@ export function evaluateExpectedLanding(
       status: mode === 'auto' && runCount < 2 ? 'learning' : 'on_time',
       statusLabel:
         mode === 'auto' && runCount < 2
-          ? `Calibrating avg (${runCount}/2 runs) · Latest ${latestTime ?? '—'}`
+          ? `Calibrating avg (${runCount}/2 runs) · Latest ${latestTime ?? 'N/A'}`
           : `Expected by ${expectedTime}`,
       isLateVsExpected: false,
     };

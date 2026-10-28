@@ -57,7 +57,7 @@ export function OverviewTab({
   const slaBreached = asset.late;
   const rawHealth = asset.healthScore ?? Math.round(asset.quality >= 0 ? asset.quality : 100);
   const healthVal = failCount === 0 && !slaBreached && rawHealth >= 98 ? 100 : rawHealth;
-  const volumeLabel = asset.rowCountLabel ?? (runs[0]?.rows && runs[0].rows !== '—' ? runs[0].rows : '—');
+  const volumeLabel = asset.rowCountLabel ?? (runs[0]?.rows && runs[0].rows !== '-' && runs[0].rows !== 'N/A' ? runs[0].rows : 'N/A');
   const healthDeltaPts = Math.round(healthVal - 100);
   const healthSubText =
     healthDeltaPts < 0 && (failCount > 0 || slaBreached)
@@ -76,7 +76,7 @@ export function OverviewTab({
       ? `SLA target ≤ ${slaLabel}`
       : `Updated ${freshNormalized} · SLA target ≤ ${slaLabel}`;
   const volumeSubText =
-    runs.length >= 2 && runs[0]?.rows && runs[0].rows !== '—'
+    runs.length >= 2 && runs[0]?.rows && runs[0].rows !== '-' && runs[0].rows !== 'N/A'
       ? `Latest commit ${runs[0].rows} · ${asset.domain} domain`
       : `${asset.type} · ${asset.domain} domain`;
 
@@ -233,7 +233,7 @@ export function OverviewTab({
           </div>
           {qualityRules.length === 0 ? (
             <div style={css('padding:16px 18px;font-size:12.5px;color:var(--fgm);')}>
-              No data quality rules configured for this table — shows N/A until rules are added.
+              No data quality rules configured for this table - shows N/A until rules are added.
             </div>
           ) : (
             qualityRules.map((q) => {

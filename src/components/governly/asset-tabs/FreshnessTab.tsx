@@ -282,8 +282,8 @@ export function cleanFailureMessage(raw: string): string {
       cleaned = `${prefixMatch[0]} ${inner}`;
     }
   }
-  // Remove duplicated " — Notebook execution failed..." if already present in the first half
-  const parts = cleaned.split(/\s+—\s+/);
+  // Remove duplicated " - Notebook execution failed..." if already present in the first half
+  const parts = cleaned.split(/\s+(?:-\s+|\u2014\s+)/);
   if (parts.length === 2 && parts[0].toLowerCase().includes(parts[1].slice(0, 32).toLowerCase())) {
     cleaned = parts[0];
   }
@@ -616,7 +616,7 @@ export function FreshnessTab({
               <span style={css("font-family:'Geist Mono',monospace;color:var(--fg);")}>{r.time}</span>
               <span style={css('color:var(--fgm);')}>lag {r.lag}</span>
               <span style={css('color:var(--fgm);')}>
-                {r.rows && r.rows !== '—' ? (r.rows.match(/^\d/) ? `${r.rows} rows` : r.rows) : asset.type}
+                {r.rows && r.rows !== '-' && r.rows !== 'N/A' ? (r.rows.match(/^\d/) ? `${r.rows} rows` : r.rows) : asset.type}
               </span>
               <span style={r.result === 'breach' ? badge('var(--crit)', 'var(--critb)') : badge('var(--ok)', 'var(--okb)')}>
                 {r.label}
@@ -660,7 +660,7 @@ export function FreshnessTab({
                     'font-size:12px;color:var(--crit,#dc2626);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:460px;',
                   )}
                 >
-                  — {cleanFailureMessage(activeDiagnostics[0].whyFailed)}
+                  - {cleanFailureMessage(activeDiagnostics[0].whyFailed)}
                 </span>
               )}
             </div>

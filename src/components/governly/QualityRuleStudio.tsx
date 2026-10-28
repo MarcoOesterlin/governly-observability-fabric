@@ -462,7 +462,7 @@ export function QualityRuleStudio({
                   "padding:8px 10px;border-radius:7px;background:var(--card,#fff);border:1px solid var(--border,#e7e7ea);font-size:11.5px;font-family:'Geist Mono',monospace;color:var(--fgm);overflow-x:auto;",
                 )}
               >
-                <div>{validation.sparkPreview || '—'}</div>
+                <div>{validation.sparkPreview || 'N/A'}</div>
                 <div style={css('margin-top:4px;color:var(--fgs);font-size:11px;')}>
                   {validation.sqlPreview}
                 </div>

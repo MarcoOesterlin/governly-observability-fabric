@@ -42,7 +42,7 @@ export default tseslint.config(
     // Rayfin backend code (user data functions, data model).
     //
     // `no-deprecated` needs type information, so this block turns on the
-    // project service rather than adopting all of `recommendedTypeChecked` —
+    // project service rather than adopting all of `recommendedTypeChecked` -
     // type-aware linting is slower and the extra rules are a separate decision.
     //
     // It surfaces the SDK's own `@deprecated` markers as build errors, which is

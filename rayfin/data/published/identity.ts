@@ -6,7 +6,7 @@ export class PubWorkspace {
   @uuid() id!: string;
   @text({ max: 36 }) workspace_id!: string;
   @text({ max: 200 }) display_name!: string;
-  @text({ max: 32 }) capacity_sku!: string;  // descriptive label in the workspace switcher only — no metric is derived from it
+  @text({ max: 32 }) capacity_sku!: string;  // descriptive label in the workspace switcher only - no metric is derived from it
   @boolean() is_monitored!: boolean;
   @date() published_at!: Date;
 }

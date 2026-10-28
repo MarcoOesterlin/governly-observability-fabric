@@ -97,7 +97,7 @@ ACTIONABLE_MONITOR_TYPES = {"Schema", "Freshness", "Pipeline", "Quality", "Volum
 
 def format_row_count(n: int | None) -> str:
     if n is None:
-        return "—"
+        return "N/A"
     if n >= 1_000_000_000:
         return f"{n / 1_000_000_000:.1f}B"
     if n >= 1_000_000:
@@ -109,7 +109,7 @@ def format_row_count(n: int | None) -> str:
 
 def format_lag_minutes(minutes: float | None) -> str:
     if minutes is None or minutes < 0:
-        return "—"
+        return "N/A"
     if minutes < 1.0:
         return f"{max(1, int(round(minutes * 60)))}s"
     mins = int(round(minutes))

@@ -22,14 +22,14 @@ coverage
 # Local env files (`*.local` matches `.env.local`, `.env.*.local`, etc.)
 *.local
 
-# Rayfin — auto-generated or secret-bearing files
+# Rayfin - auto-generated or secret-bearing files
 # `rayfin/.env*` covers .env, .env.bak (emitted by env-file v2 migration with
 # secrets), and any future .env-family files Rayfin's runtime adds.
 rayfin/.env*
 rayfin/.deployments.json
 rayfin/.*.tmp
 rayfin/.temp/
-# Transient runtime config emitted during deploy — never commit.
+# Transient runtime config emitted during deploy - never commit.
 rayfin.config.json
 
 # Editor / OS

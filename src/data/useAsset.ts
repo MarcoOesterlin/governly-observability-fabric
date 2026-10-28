@@ -31,7 +31,7 @@ const EMPTY_LIVE_ASSET: AssetItem = {
   type: "Lakehouse table",
   icon: "ph-database",
   domain: "General",
-  fresh: "—",
+  fresh: "N/A",
   late: false,
   quality: -1,
   status: "healthy",

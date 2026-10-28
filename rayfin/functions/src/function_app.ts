@@ -32,7 +32,7 @@ interface FabricJobInstance {
 }
 
 function formatLagShort(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes < 0) return '—';
+  if (!Number.isFinite(minutes) || minutes < 0) return 'N/A';
   if (minutes < 1) return `${Math.max(1, Math.round(minutes * 60))}s`;
   const mins = Math.round(minutes);
   if (mins < 60) return `${mins}m`;

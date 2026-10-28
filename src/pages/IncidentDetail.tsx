@@ -316,7 +316,7 @@ export function IncidentDetail({
             </span>
           </div>
           <div style={css('font-size:21px;font-weight:600;letter-spacing:-0.01em;color:var(--fg,#18181b);margin-top:8px;')}>
-            <span>{baseInc.title}</span> — <span style={css("font-family:'Geist Mono',monospace;")}>{baseInc.asset}</span>
+            <span>{baseInc.title}</span> · <span style={css("font-family:'Geist Mono',monospace;")}>{baseInc.asset}</span>
           </div>
         </div>
       </div>
@@ -350,7 +350,7 @@ export function IncidentDetail({
               <div>
                 <div style={css('font-size:11px;color:var(--fgs);text-transform:uppercase;letter-spacing:0.04em;font-weight:600;')}>Current lag</div>
                 <div style={css("font-size:14px;font-weight:600;color:var(--crit);font-family:'Geist Mono',monospace;margin-top:4px;")}>
-                  {baseInc.observed ?? '—'}
+                  {baseInc.observed ?? 'N/A'}
                 </div>
               </div>
               <div>

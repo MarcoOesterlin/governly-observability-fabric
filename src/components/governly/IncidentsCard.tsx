@@ -18,7 +18,7 @@ export function IncidentsCard({ incidents, openCount }: { incidents: IncidentFix
       </div>
       {activeIncidents.length === 0 ? (
         <div style={css('padding:18px;font-size:12.5px;color:var(--fgm,#52525b);')}>
-          No active incidents — all monitors are healthy.
+          No active incidents - all monitors are healthy.
         </div>
       ) : (
         activeIncidents.map((i) => {

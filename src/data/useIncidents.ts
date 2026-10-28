@@ -235,10 +235,10 @@ export function useIncidents(_filter: IncidentFilter = {}): IncidentFixture[] {
 const EMPTY_LIVE_INCIDENT: IncidentFixture = {
   id: "NONE",
   title: "No active incident",
-  asset: "—",
+  asset: "N/A",
   sev: "Low",
   status: "Resolved",
-  age: "—",
+  age: "N/A",
   initials: "ST",
   monitor: "Observability",
 };

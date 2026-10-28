@@ -83,7 +83,7 @@ export function isCaseLinkedToIncident(
   }
   const titleLower = String(c.title ?? "").toLowerCase();
   const assetLower = String(inc.asset ?? "").trim().toLowerCase();
-  if (assetLower && assetLower !== "—" && titleLower.includes(assetLower)) {
+  if (assetLower && assetLower !== "-" && assetLower !== "n/a" && titleLower.includes(assetLower)) {
     return true;
   }
   return false;

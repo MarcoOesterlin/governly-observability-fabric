@@ -98,8 +98,8 @@ export function Freshness() {
           (r.completed_at
             ? String(r.completed_at).slice(0, 16).replace('T', ' ')
             : 'Recent'),
-        lag: r.lag_label || '—',
-        rows: r.rows_label || '—',
+        lag: r.lag_label || 'N/A',
+        rows: r.rows_label || 'N/A',
         result: (isBreach ? 'breach' : 'ok') as 'ok' | 'breach',
         label: isHardFail ? 'Run Failed' : isBreach ? 'SLA Breach' : 'On time',
       };
@@ -215,7 +215,7 @@ export function Freshness() {
           <div>
             <div style={css('font-size:22px;font-weight:600;letter-spacing:-0.02em;color:var(--fg,#18181b);')}>Pipelines &amp; Freshness</div>
             <div style={css('font-size:13.5px;color:var(--fgm,#52525b);margin-top:4px;')}>
-              {slaPct}% SLA compliance across {kpiScopeItems.length} runtime workloads — Spark notebooks &amp; data pipelines ({onTimeCount} healthy).
+              {slaPct}% SLA compliance across {kpiScopeItems.length} runtime workloads: Spark notebooks &amp; data pipelines ({onTimeCount} healthy).
             </div>
           </div>
           {inspectableItems.length > 0 && (

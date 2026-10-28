@@ -756,8 +756,8 @@ export function Settings() {
             <div style={css('font-size:13.5px;font-weight:600;color:var(--fg);')}>Steward Case Management System</div>
             <div style={css('font-size:12px;color:var(--fgm);margin-top:2px;')}>
               {casesEnabled
-                ? 'Enabled — Cases Kanban board and Open Cases KPI are active for schema drift, SLA breaches, and quality failures.'
-                : 'Disabled — Cases navigation and KPI cards are hidden across the workspace.'}
+                ? 'Enabled: Cases Kanban board and Open Cases KPI are active for schema drift, SLA breaches, and quality failures.'
+                : 'Disabled: Cases navigation and KPI cards are hidden across the workspace.'}
             </div>
           </div>
           <button

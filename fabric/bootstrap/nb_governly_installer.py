@@ -1,6 +1,6 @@
 # Fabric Notebook source
 # ============================================================================
-# Governly — Idempotent Single-Notebook Installer & Updater for Microsoft Fabric
+# Governly - Idempotent Single-Notebook Installer & Updater for Microsoft Fabric
 # ============================================================================
 # Import this notebook into ANY Microsoft Fabric workspace (attached to an F-SKU
 # capacity) and click "Run All".
@@ -14,7 +14,7 @@
 #   telemetry sync.
 
 # %% [markdown]
-# # Governly — One-Click Fabric Installer & Updater
+# # Governly - One-Click Fabric Installer & Updater
 # Run all cells to install or update Governly in this Microsoft Fabric workspace.
 
 # %% tags=["parameters"]
@@ -414,7 +414,7 @@ def trigger_notebook_run(
     print(f"Triggering initial RunNotebook job on nb_governly_compute_publish ({notebook_id})...")
     status, _, headers = fabric_request("POST", run_url, token, {})
     loc = headers.get("location")
-    print(f"Initial RunNotebook job queued (HTTP {status}, location={loc}) — will start as soon as installer releases Spark session.")
+    print(f"Initial RunNotebook job queued (HTTP {status}, location={loc}) - will start as soon as installer releases Spark session.")
 
 
 # %%

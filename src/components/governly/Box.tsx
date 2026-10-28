@@ -9,7 +9,7 @@ type BoxProps = {
   disabled?: boolean;
 } & Omit<ComponentPropsWithoutRef<'div'>, 'style'>;
 
-// ponytail: hover via state, not CSS classes — fine at this element count; move to a stylesheet if a list ever renders thousands of hoverable rows.
+// ponytail: hover via state, not CSS classes - fine at this element count; move to a stylesheet if a list ever renders thousands of hoverable rows.
 export function Box({ style, hover, as: Tag = 'div', ...rest }: BoxProps) {
   const [over, setOver] = useState(false);
   const merged = hover && over ? { ...css(style), ...css(hover) } : css(style);

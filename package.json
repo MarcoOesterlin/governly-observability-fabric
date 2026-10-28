@@ -6,7 +6,7 @@
   "template": {
     "name": "todoapp",
     "displayName": "Basic Todo App",
-    "description": "End-to-end Fabric-authenticated todo CRUD with a Rayfin data model and per-user row-level security — a working starter that exercises the full data path"
+    "description": "Governly: Native Microsoft Fabric Data Observability application built with Rayfin"
   },
   "scripts": {
     "dev": "rayfin dev",
